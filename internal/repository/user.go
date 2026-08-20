@@ -37,11 +37,12 @@ func (ds *UserRepository) FindUserByEmail(email string) (*models.User, error) {
 			password,
 			lang,
 			theme
+			, api_only
 		FROM users
-		WHERE email = ? AND deleting = 0`
+		WHERE email = ? AND deleting = 0 AND api_only = 0`
 
 	row := ds.DB.QueryRow(query, email)
-	err := row.Scan(&u.Id, &u.Email, &u.Password, &u.Lang, &u.Theme)
+	err := row.Scan(&u.Id, &u.Email, &u.Password, &u.Lang, &u.Theme, &u.APIOnly)
 	if err != nil {
 		return u, err
 	}

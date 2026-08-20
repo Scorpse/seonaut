@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -113,5 +114,17 @@ func TestKeyManagerRotationOverlapsThenExpiresOldKeyAndRevocationIsImmediate(t *
 	}
 	if _, err := auth.Authenticate(context.Background(), "Bearer "+replacement.Key); err == nil {
 		t.Fatal("revoked key remained active")
+	}
+}
+
+func TestReadOnlyKeyRejectsEveryMutationScope(t *testing.T) {
+	store := &managerMemoryStore{keys: map[string]StoredKey{}}
+	manager := KeyManager{Environment: "prod", Store: store}
+	issuer := Principal{Kind: KeyTenant, TenantID: "tenant-a", Scopes: NewScopeSet(ScopeKeysManage)}
+	for _, scope := range []string{ScopeProjectsWrite, ScopeCrawlsRun, ScopeCrawlsCancel, ScopeKeysManage} {
+		_, err := manager.CreateDelegatedKey(context.Background(), issuer, DelegatedKeyInput{Kind: KeyReadOnly, Scopes: []string{scope}})
+		if !errors.Is(err, ErrInvalidKeyRequest) {
+			t.Fatalf("read-only scope %q error=%v, want ErrInvalidKeyRequest", scope, err)
+		}
 	}
 }

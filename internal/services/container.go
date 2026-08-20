@@ -39,6 +39,7 @@ type Container struct {
 	ReplayService      *ReplayService
 	APIAuthenticator   api.Authenticator
 	APIKeyManager      api.KeyManager
+	APITenantManager   api.TenantManager
 
 	db                   *sql.DB
 	issueRepository      *repository.IssueRepository
@@ -49,6 +50,7 @@ type Container struct {
 	crawlRepository      *repository.CrawlRepository
 	dashboardRepository  *repository.DashboardRepository
 	apiKeyRepository     *repository.APIKeyRepository
+	apiTenantRepository  *repository.APITenantRepository
 }
 
 func (c *Container) Ready(ctx context.Context) error {
@@ -125,6 +127,7 @@ func (c *Container) InitRepositories() {
 	c.crawlRepository = &repository.CrawlRepository{DB: c.db}
 	c.dashboardRepository = &repository.DashboardRepository{DB: c.db}
 	c.apiKeyRepository = &repository.APIKeyRepository{DB: c.db}
+	c.apiTenantRepository = &repository.APITenantRepository{DB: c.db}
 
 	// Clean up unfinished crawls.
 	c.crawlRepository.DeleteUnfinishedCrawls()
@@ -132,6 +135,7 @@ func (c *Container) InitRepositories() {
 
 func (c *Container) InitAPIServices() {
 	c.APIAuthenticator, c.APIKeyManager = NewAPIServices(c.Config.API, c.apiKeyRepository)
+	c.APITenantManager = api.TenantManager{Store: c.apiTenantRepository, Keys: c.APIKeyManager}
 }
 
 // Create the PubSub broker.

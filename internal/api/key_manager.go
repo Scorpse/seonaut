@@ -20,6 +20,13 @@ type MutableKeyStore interface {
 	RevokeAPIKey(context.Context, string, KeyKind, time.Time) error
 }
 
+type TenantMutableKeyStore interface {
+	MutableKeyStore
+	ListTenantAPIKeys(context.Context, string) ([]StoredKey, error)
+	RotateTenantAPIKey(context.Context, string, string, StoredKey, time.Time) error
+	RevokeTenantAPIKey(context.Context, string, string, time.Time) error
+}
+
 type KeyManager struct {
 	Environment     string
 	Store           MutableKeyStore
@@ -88,11 +95,83 @@ func (m KeyManager) RevokePlatformKey(ctx context.Context, publicID string) erro
 	return m.Store.RevokeAPIKey(ctx, publicID, KeyPlatform, m.now())
 }
 
+func (m KeyManager) CreateTenantKey(ctx context.Context, tenantID string, input CreateKeyInput) (IssuedKey, error) {
+	if tenantID == "" || !validTenantScopes(input.Scopes, KeyTenant) || input.ExpiresAt != nil && !input.ExpiresAt.After(m.now()) {
+		return IssuedKey{}, ErrInvalidKeyRequest
+	}
+	return m.issueBound(ctx, KeyTenant, tenantID, "", input.Scopes, input.ExpiresAt, "")
+}
+
+func (m KeyManager) CreateDelegatedKey(ctx context.Context, issuer Principal, input DelegatedKeyInput) (IssuedKey, error) {
+	if issuer.Kind != KeyTenant || issuer.TenantID == "" || !issuer.Scopes.Has(ScopeKeysManage) {
+		return IssuedKey{}, ErrInvalidKeyRequest
+	}
+	if input.Kind != KeyTenant && input.Kind != KeyReadOnly || input.Kind == KeyTenant && input.ProjectID != "" || !validTenantScopes(input.Scopes, input.Kind) {
+		return IssuedKey{}, ErrInvalidKeyRequest
+	}
+	return m.issueBound(ctx, input.Kind, issuer.TenantID, input.ProjectID, input.Scopes, input.ExpiresAt, "")
+}
+
+func (m KeyManager) ListTenantKeys(ctx context.Context, principal Principal) ([]KeyMetadata, error) {
+	store, ok := m.Store.(TenantMutableKeyStore)
+	if !ok || principal.Kind != KeyTenant || principal.TenantID == "" || !principal.Scopes.Has(ScopeKeysManage) {
+		return nil, ErrInvalidKeyRequest
+	}
+	keys, err := store.ListTenantAPIKeys(ctx, principal.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]KeyMetadata, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, metadataFrom(key))
+	}
+	return out, nil
+}
+
+func (m KeyManager) RotateTenantKey(ctx context.Context, principal Principal, publicID string) (IssuedKey, error) {
+	store, ok := m.Store.(TenantMutableKeyStore)
+	if !ok || principal.Kind != KeyTenant || principal.TenantID == "" || !principal.Scopes.Has(ScopeKeysManage) {
+		return IssuedKey{}, ErrInvalidKeyRequest
+	}
+	old, err := store.FindAPIKey(ctx, publicID)
+	if err != nil || old.TenantID != principal.TenantID || old.Kind != KeyTenant && old.Kind != KeyReadOnly || old.RevokedAt != nil {
+		return IssuedKey{}, ErrKeyNotFound
+	}
+	issued, replacement, err := m.newIssued(old.Kind, old.Scopes, old.ExpiresAt, publicID)
+	if err != nil {
+		return IssuedKey{}, err
+	}
+	replacement.TenantID, replacement.ProjectID = old.TenantID, old.ProjectID
+	overlap := m.RotationOverlap
+	if overlap <= 0 {
+		overlap = 5 * time.Minute
+	}
+	if err := store.RotateTenantAPIKey(ctx, principal.TenantID, publicID, replacement, m.now().Add(overlap)); err != nil {
+		return IssuedKey{}, err
+	}
+	issued.TenantID, issued.ProjectID = old.TenantID, old.ProjectID
+	return issued, nil
+}
+
+func (m KeyManager) RevokeTenantKey(ctx context.Context, principal Principal, publicID string) error {
+	store, ok := m.Store.(TenantMutableKeyStore)
+	if !ok || principal.Kind != KeyTenant || principal.TenantID == "" || !principal.Scopes.Has(ScopeKeysManage) {
+		return ErrInvalidKeyRequest
+	}
+	return store.RevokeTenantAPIKey(ctx, principal.TenantID, publicID, m.now())
+}
+
 func (m KeyManager) issue(ctx context.Context, kind KeyKind, scopes []string, expiresAt *time.Time, rotatedFrom string) (IssuedKey, error) {
+	return m.issueBound(ctx, kind, "", "", scopes, expiresAt, rotatedFrom)
+}
+
+func (m KeyManager) issueBound(ctx context.Context, kind KeyKind, tenantID, projectID string, scopes []string, expiresAt *time.Time, rotatedFrom string) (IssuedKey, error) {
 	issued, stored, err := m.newIssued(kind, scopes, expiresAt, rotatedFrom)
 	if err != nil {
 		return IssuedKey{}, err
 	}
+	stored.TenantID, stored.ProjectID = tenantID, projectID
+	issued.TenantID, issued.ProjectID = tenantID, projectID
 	if err := m.Store.CreateAPIKey(ctx, stored); err != nil {
 		return IssuedKey{}, err
 	}
@@ -147,5 +226,29 @@ func metadataFrom(key StoredKey) KeyMetadata {
 		ExpiresAt:   key.ExpiresAt,
 		RevokedAt:   key.RevokedAt,
 		RotatedFrom: key.RotatedFrom,
+		TenantID:    key.TenantID,
+		ProjectID:   key.ProjectID,
 	}
+}
+
+func validTenantScopes(scopes []string, kind KeyKind) bool {
+	if len(scopes) == 0 {
+		return false
+	}
+	allowed := NewScopeSet(ScopeProjectsRead, ScopeCrawlsRead, ScopeFindingsRead, ScopeExportsRead, ScopeMetaRead)
+	if kind == KeyTenant {
+		for _, scope := range []string{ScopeProjectsWrite, ScopeCrawlsRun, ScopeCrawlsCancel, ScopeKeysManage} {
+			allowed[scope] = struct{}{}
+		}
+	} else if kind != KeyReadOnly {
+		return false
+	}
+	seen := ScopeSet{}
+	for _, scope := range scopes {
+		if !allowed.Has(scope) || seen.Has(scope) {
+			return false
+		}
+		seen[scope] = struct{}{}
+	}
+	return true
 }

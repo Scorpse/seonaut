@@ -5,8 +5,7 @@ import (
 	"net/mail"
 
 	"github.com/stjudewashere/seonaut/internal/models"
-
-	"golang.org/x/crypto/bcrypt"
+	"github.com/stjudewashere/seonaut/internal/passwordhash"
 )
 
 var (
@@ -81,14 +80,14 @@ func (s *UserService) SignUp(email, password, lang, theme string) (*models.User,
 		return nil, ErrInvalidEmail
 	}
 
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hashedPassword, err := passwordhash.Hash([]byte(password))
 	if err != nil {
 		return nil, err
 	}
 
 	theme = s.getValidatedTheme(theme)
 
-	return s.repository.UserSignup(email, string(hashedPassword), lang, theme)
+	return s.repository.UserSignup(email, hashedPassword, lang, theme)
 }
 
 // SignIn validates the provided email and password combination for user authentication.
@@ -99,8 +98,11 @@ func (s *UserService) SignIn(email, password string) (*models.User, error) {
 	if err != nil {
 		return nil, ErrUnexistingUser
 	}
+	if u.APIOnly {
+		return nil, ErrUnexistingUser
+	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)); err != nil {
+	if err := passwordhash.Verify(u.Password, []byte(password)); err != nil {
 		return nil, ErrIncorrectPassword
 	}
 
@@ -114,16 +116,16 @@ func (s *UserService) UpdatePassword(user *models.User, currentPassword, newPass
 		return ErrInvalidPassword
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(currentPassword)); err != nil {
+	if err := passwordhash.Verify(user.Password, []byte(currentPassword)); err != nil {
 		return ErrIncorrectPassword
 	}
 
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	hashedPassword, err := passwordhash.Hash([]byte(newPassword))
 	if err != nil {
 		return err
 	}
 
-	err = s.repository.UserUpdatePassword(user.Email, string(hashedPassword))
+	err = s.repository.UserUpdatePassword(user.Email, hashedPassword)
 	if err != nil {
 		return err
 	}

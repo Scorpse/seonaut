@@ -18,6 +18,8 @@ const expireAPIKeySQL = `UPDATE api_keys SET expires_at = ? WHERE public_id = ? 
 
 const listAPIKeysSQL = `SELECT public_id, secret_hash, key_kind, COALESCE(tenant_id, ''), COALESCE(project_id, ''), scopes, created_at, expires_at, revoked_at, COALESCE(rotated_from_public_id, '') FROM api_keys WHERE key_kind = ? ORDER BY created_at, public_id`
 
+const listTenantAPIKeysSQL = `SELECT public_id, secret_hash, key_kind, COALESCE(tenant_id, ''), COALESCE(project_id, ''), scopes, created_at, expires_at, revoked_at, COALESCE(rotated_from_public_id, '') FROM api_keys WHERE tenant_id = ? AND key_kind IN ('tenant', 'read_only') ORDER BY created_at, public_id`
+
 type APIKeyRepository struct {
 	DB *sql.DB
 }
@@ -83,6 +85,62 @@ func (r APIKeyRepository) RevokeAPIKey(ctx context.Context, publicID string, kin
 		return errors.New("api key repository has no database")
 	}
 	result, err := r.DB.ExecContext(ctx, `UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE public_id = ? AND key_kind = ?`, at, publicID, kind)
+	if err != nil {
+		return err
+	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		return api.ErrKeyNotFound
+	}
+	return nil
+}
+
+func (r APIKeyRepository) ListTenantAPIKeys(ctx context.Context, tenantID string) ([]api.StoredKey, error) {
+	if r.DB == nil {
+		return nil, errors.New("api key repository has no database")
+	}
+	rows, err := r.DB.QueryContext(ctx, listTenantAPIKeysSQL, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := []api.StoredKey{}
+	for rows.Next() {
+		key, err := scanAPIKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
+func (r APIKeyRepository) RotateTenantAPIKey(ctx context.Context, tenantID, oldPublicID string, replacement api.StoredKey, overlapUntil time.Time) error {
+	if r.DB == nil {
+		return errors.New("api key repository has no database")
+	}
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE api_keys SET expires_at = ? WHERE public_id = ? AND tenant_id = ? AND key_kind IN ('tenant', 'read_only') AND revoked_at IS NULL`, overlapUntil, oldPublicID, tenantID)
+	if err != nil {
+		return err
+	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		return api.ErrKeyNotFound
+	}
+	if err := createAPIKey(ctx, tx, replacement); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r APIKeyRepository) RevokeTenantAPIKey(ctx context.Context, tenantID, publicID string, at time.Time) error {
+	if r.DB == nil {
+		return errors.New("api key repository has no database")
+	}
+	result, err := r.DB.ExecContext(ctx, `UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE public_id = ? AND tenant_id = ? AND key_kind IN ('tenant', 'read_only')`, at, publicID, tenantID)
 	if err != nil {
 		return err
 	}

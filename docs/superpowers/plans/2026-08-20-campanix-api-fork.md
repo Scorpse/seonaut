@@ -35,11 +35,11 @@
 **Interfaces:**
 - Produces: `api.NewHandler(Dependencies) http.Handler`, `buildinfo.Info`, `/api/v1/health`, `/api/v1/meta`.
 
-- [ ] Write an `httptest` table proving health returns readiness only, metadata requires a non-root `meta:read` principal, and all responses echo/create `X-Request-ID`.
-- [ ] Run `go test ./internal/api` and verify failure because `api.NewHandler` does not exist.
-- [ ] Implement the minimal handler, JSON error envelope, request-ID middleware, and build-time provenance variables.
-- [ ] Mount the handler on the existing mux without changing HTML route behavior; add OCI labels and `-ldflags` build arguments.
-- [ ] Run `go test ./internal/api ./internal/routes ./...`, `go vet ./...`, and commit `MKT-281 add API health and provenance boundary`.
+- [x] Write an `httptest` table proving health returns readiness only, metadata requires a non-root `meta:read` principal, and all responses echo/create `X-Request-ID`.
+- [x] Run `go test ./internal/api` and verify failure because `api.NewHandler` does not exist.
+- [x] Implement the minimal handler, JSON error envelope, request-ID middleware, and build-time provenance variables.
+- [x] Mount the handler on the existing mux without changing HTML route behavior; add OCI labels and `-ldflags` build arguments.
+- [x] Run `go test ./internal/api ./internal/routes ./...`, `go vet ./...`, and commit `MKT-281 add API health and provenance boundary`.
 
 ### Task 2: Key schema, hashing, principals, and root/platform routes
 
@@ -54,12 +54,12 @@
 **Interfaces:**
 - Produces: `api.Principal{Kind, KeyID, TenantID, ProjectID, Scopes}`, `Authenticate(context.Context,string)`, one-time key issuance and rotation/revocation.
 
-- [ ] Write table tests for malformed, expired, revoked, wrong-hash, root, platform, tenant, and project-bound read-only keys; explicitly prove root cannot satisfy tenant middleware.
-- [ ] Run the focused tests and verify missing-symbol failures.
-- [ ] Add `api_keys` and `api_audit_log` migrations with public ID, Argon2id hash, class, bindings, scopes, expiry, revocation, and rotation metadata.
-- [ ] Implement key parsing/generation/hash verification and repository methods with parameterized SQL.
-- [ ] Add root-only create/list/rotate/revoke platform-key routes and scope middleware.
-- [ ] Run focused tests, full `go test -race ./...`, and commit `MKT-281 add scoped API credential lifecycle`.
+- [x] Write table tests for malformed, expired, revoked, wrong-hash, root, platform, tenant, and project-bound read-only keys; explicitly prove root cannot satisfy tenant middleware.
+- [x] Run the focused tests and verify missing-symbol failures.
+- [x] Add `api_keys` and `api_audit_log` migrations with public ID, Argon2id hash, class, bindings, scopes, expiry, revocation, and rotation metadata.
+- [x] Implement key parsing/generation/hash verification and repository methods with parameterized SQL.
+- [x] Add root-only create/list/rotate/revoke platform-key routes and scope middleware.
+- [x] Run focused tests, full `go test -race ./...`, and commit `MKT-281 add scoped API credential lifecycle`.
 
 ### Task 3: Tenant provisioning and tenant/read-only key lifecycle
 
@@ -74,11 +74,11 @@
 - Consumes: platform and tenant principals from Task 2.
 - Produces: idempotent `PUT /api/v1/tenants/{external_tenant_id}` and tenant/read-only key issue/list/rotate/revoke.
 
-- [ ] Write tests proving repeated provisioning returns one binding, generated service users cannot log into the UI, platform keys cannot list tenant data, and tenant issuers cannot cross tenant/project bounds.
-- [ ] Verify red tests.
-- [ ] Add tenant-to-upstream-user binding persistence and an internal service-user creation path reusing upstream password hashing.
-- [ ] Implement handlers and repository methods; never accept owner IDs in request bodies.
-- [ ] Run focused and race tests, then commit `MKT-281 add tenant provisioning and delegated keys`.
+- [x] Write tests proving repeated provisioning returns one binding, generated service users cannot log into the UI, platform keys cannot list tenant data, and tenant issuers cannot cross tenant/project bounds.
+- [x] Verify red tests.
+- [x] Add tenant-to-upstream-user binding persistence and an internal service-user creation path reusing upstream password hashing.
+- [x] Implement handlers and repository methods; never accept owner IDs in request bodies.
+- [x] Run focused and race tests, then commit `MKT-281 add tenant provisioning and delegated keys`.
 
 ### Task 4: Owner-scoped project API and idempotency
 

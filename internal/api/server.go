@@ -74,6 +74,7 @@ type Dependencies struct {
 	Authenticate AuthenticateFunc
 	Build        BuildInfo
 	PlatformKeys PlatformKeyService
+	Tenants      TenantService
 }
 
 type server struct {
@@ -95,6 +96,13 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.Handle("GET /api/v1/root/platform-keys", requestIDMiddleware(http.HandlerFunc(s.listPlatformKeys)))
 	mux.Handle("POST /api/v1/root/platform-keys/{key_id}/rotate", requestIDMiddleware(http.HandlerFunc(s.rotatePlatformKey)))
 	mux.Handle("POST /api/v1/root/platform-keys/{key_id}/revoke", requestIDMiddleware(http.HandlerFunc(s.revokePlatformKey)))
+	mux.Handle("PUT /api/v1/tenants/{external_tenant_id}", requestIDMiddleware(http.HandlerFunc(s.provisionTenant)))
+	mux.Handle("GET /api/v1/tenants/{external_tenant_id}", requestIDMiddleware(http.HandlerFunc(s.getTenant)))
+	mux.Handle("POST /api/v1/tenants/{external_tenant_id}/keys", requestIDMiddleware(http.HandlerFunc(s.issueInitialTenantKey)))
+	mux.Handle("POST /api/v1/keys", requestIDMiddleware(http.HandlerFunc(s.issueDelegatedKey)))
+	mux.Handle("GET /api/v1/keys", requestIDMiddleware(http.HandlerFunc(s.listTenantKeys)))
+	mux.Handle("POST /api/v1/keys/{key_id}/rotate", requestIDMiddleware(http.HandlerFunc(s.rotateTenantKey)))
+	mux.Handle("POST /api/v1/keys/{key_id}/revoke", requestIDMiddleware(http.HandlerFunc(s.revokeTenantKey)))
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {

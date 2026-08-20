@@ -21,6 +21,8 @@ type KeyMetadata struct {
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 	RotatedFrom string     `json:"rotated_from,omitempty"`
+	TenantID    string     `json:"tenant_id,omitempty"`
+	ProjectID   string     `json:"project_id,omitempty"`
 }
 
 type IssuedKey struct {

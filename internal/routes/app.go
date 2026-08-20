@@ -28,6 +28,7 @@ func NewServer(container *services.Container) {
 		Authenticate: container.APIAuthenticator.Authenticate,
 		Build:        buildinfo.Current(),
 		PlatformKeys: container.APIKeyManager,
+		Tenants:      container.APITenantManager,
 	})
 
 	// Handle static files
