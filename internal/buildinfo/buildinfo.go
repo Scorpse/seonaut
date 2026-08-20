@@ -4,7 +4,7 @@ var (
 	ForkVersion      = "dev"
 	ForkRevision     = "unknown"
 	UpstreamRevision = "880b312c28fab8b0bf7fe4f9449dc4746dbb82ff"
-	SchemaVersion    = "76"
+	SchemaVersion    = "80"
 )
 
 type Info struct {

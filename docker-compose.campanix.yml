@@ -1,0 +1,83 @@
+name: seonaut-campanix-smoke
+
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root-smoke
+      MYSQL_DATABASE: seonaut
+      MYSQL_USER: seonaut
+      MYSQL_PASSWORD: seonaut-smoke
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -proot-smoke --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - database:/var/lib/mysql
+    networks: [smoke]
+
+  fixture:
+    image: nginx:1.29-alpine
+    volumes:
+      - ./internal/api/testdata/fixture-site:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [smoke]
+
+  app:
+    image: kilnbench/seonaut-campanix:${SEONAUT_FORK_REVISION:-dev}
+    build:
+      context: .
+      args:
+        GO_BUILD_TAGS: fixture
+        FORK_VERSION: ${SEONAUT_FORK_VERSION:-smoke}
+        FORK_REVISION: ${SEONAUT_FORK_REVISION:-unknown}
+        UPSTREAM_REVISION: 880b312c28fab8b0bf7fe4f9449dc4746dbb82ff
+        SCHEMA_VERSION: "80"
+    depends_on:
+      db:
+        condition: service_healthy
+      fixture:
+        condition: service_healthy
+    command: sh -c "/bin/wait && /app/seonaut -c /app/config.campanix-smoke"
+    environment:
+      WAIT_HOSTS: db:3306
+      WAIT_TIMEOUT: 120
+      WAIT_SLEEP_INTERVAL: 2
+      WAIT_HOST_CONNECT_TIMEOUT: 3
+    ports:
+      - "${SEONAUT_SMOKE_PORT:-19000}:9000"
+    volumes:
+      - ./config.campanix-smoke:/app/config.campanix-smoke:ro
+    networks: [smoke]
+
+  rollback:
+    image: ghcr.io/stjudewashere/seonaut@sha256:77826fb91f1f7b3d054bcd73c4f9df40c6b40962cfab68208f435e0758266415
+    profiles: [rollback]
+    depends_on:
+      db:
+        condition: service_healthy
+    command: sh -c "/bin/wait && /app/seonaut"
+    environment:
+      WAIT_HOSTS: db:3306
+      WAIT_TIMEOUT: 120
+      WAIT_SLEEP_INTERVAL: 2
+      WAIT_HOST_CONNECT_TIMEOUT: 3
+      SEONAUT_DATABASE_SERVER: db
+      SEONAUT_DATABASE_USER: seonaut
+      SEONAUT_DATABASE_PASSWORD: seonaut-smoke
+      SEONAUT_DATABASE_DATABASE: seonaut
+      SEONAUT_SERVER_URL: http://localhost:19001
+    ports:
+      - "${SEONAUT_ROLLBACK_PORT:-19001}:9000"
+    networks: [smoke]
+
+volumes:
+  database:
+
+networks:
+  smoke:

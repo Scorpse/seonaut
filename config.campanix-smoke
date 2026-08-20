@@ -1,0 +1,26 @@
+[server]
+host = "0.0.0.0"
+port = 9000
+url = "http://localhost:19000"
+
+[database]
+server = "db"
+port = 3306
+user = "seonaut"
+password = "seonaut-smoke"
+database = "seonaut"
+
+[crawler]
+agent = "Kilnbench-SEOnaut-Smoke/1.0"
+
+[UI]
+language = "en"
+theme = "dark"
+
+[api]
+environment = "test"
+root_public_id = "root"
+root_hash = "$argon2id$v=19$m=65536,t=3,p=2$py9HZqw+kjUuwC/2Fh+kGw$lZ0cUJ+5fCMKd/PfNy1v7REkB5Q6A+3S1bfcWO+B4jw"
+cursor_secret = "campanix-smoke-cursor-secret-change-me"
+rotation_overlap_seconds = 30
+fixture_hosts = ["fixture"]
