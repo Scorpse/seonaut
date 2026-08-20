@@ -22,6 +22,7 @@ const (
 var (
 	ErrCrawlNotFound      = errors.New("api crawl not found")
 	ErrCrawlAlreadyActive = errors.New("crawl already active")
+	ErrCrawlQuotaExceeded = errors.New("crawl concurrency quota exceeded")
 )
 
 type APICrawl struct {
@@ -139,6 +140,8 @@ func writeCrawlError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrProjectNotFound):
 		writeProjectError(w, r, err)
+	case errors.Is(err, ErrTargetForbidden):
+		writeProjectError(w, r, err)
 	case errors.Is(err, ErrCrawlNotFound):
 		writeError(w, r, http.StatusNotFound, "crawl_not_found", "Crawl was not found")
 	case errors.Is(err, ErrIdempotencyKeyRequired):
@@ -147,6 +150,9 @@ func writeCrawlError(w http.ResponseWriter, r *http.Request, err error) {
 		writeProjectError(w, r, err)
 	case errors.Is(err, ErrCrawlAlreadyActive):
 		writeError(w, r, http.StatusConflict, "crawl_already_active", "A crawl is already active for this project")
+	case errors.Is(err, ErrCrawlQuotaExceeded):
+		w.Header().Set("Retry-After", "2")
+		writeError(w, r, http.StatusTooManyRequests, "rate_limited", "The tenant crawl concurrency limit was reached")
 	default:
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed")
 	}

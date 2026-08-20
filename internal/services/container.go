@@ -45,6 +45,11 @@ type Container struct {
 	APICrawlManager    api.CrawlManager
 	APIFindings        api.FindingService
 	APIExports         *APIExportManager
+	APIRateLimiter     *api.FixedWindowLimiter
+	APICrawlSlots      *api.ConcurrencyBudget
+	APIExportSlots     *api.ConcurrencyBudget
+	APITargetPolicy    *api.TargetPolicy
+	APIAudit           api.AuditSink
 
 	db                   *sql.DB
 	issueRepository      *repository.IssueRepository
@@ -142,6 +147,7 @@ func (c *Container) InitRepositories() {
 	c.apiCrawlRepository = &repository.APICrawlRepository{DB: c.db}
 	c.apiFindingRepository = &repository.APIFindingRepository{DB: c.db}
 	c.apiExportRepository = &repository.APIExportRepository{DB: c.db}
+	c.APIAudit = &repository.APIAuditRepository{DB: c.db}
 
 	if _, err := c.apiCrawlRepository.RecoverInterruptedCrawls(context.Background(), time.Now().UTC()); err != nil {
 		log.Printf("Recover interrupted API crawls: %v", err)
@@ -152,10 +158,20 @@ func (c *Container) InitRepositories() {
 }
 
 func (c *Container) InitAPIServices() {
+	var err error
+	c.APITargetPolicy, err = api.NewTargetPolicy(c.Config.API.Environment, nil, nil)
+	if err != nil {
+		log.Fatalf("Configure API target policy: %v", err)
+	}
+	c.APIRateLimiter = api.NewFixedWindowLimiter(time.Minute, map[api.RateClass]int{
+		api.RateRead: 600, api.RateCrawl: 30, api.RateExport: 120,
+	}, nil)
+	c.APICrawlSlots = api.NewConcurrencyBudget(2, 8)
+	c.APIExportSlots = api.NewConcurrencyBudget(4, 16)
 	c.APIAuthenticator, c.APIKeyManager = NewAPIServices(c.Config.API, c.apiKeyRepository)
 	c.APITenantManager = api.TenantManager{Store: c.apiTenantRepository, Keys: c.APIKeyManager}
-	c.APIProjectManager = api.ProjectManager{Store: c.apiProjectRepository}
-	c.APICrawlManager = api.CrawlManager{Store: c.apiCrawlRepository, Projects: c.apiProjectRepository}
+	c.APIProjectManager = api.ProjectManager{Store: c.apiProjectRepository, Targets: c.APITargetPolicy}
+	c.APICrawlManager = api.CrawlManager{Store: c.apiCrawlRepository, Projects: c.apiProjectRepository, Slots: c.APICrawlSlots, Targets: c.APITargetPolicy}
 	c.APIFindings = c.apiFindingRepository
 }
 
@@ -253,11 +269,13 @@ func (c *Container) InitAPIExportService() {
 // Create Crawler service.
 func (c *Container) InitCrawlerService() {
 	crawlerServices := CrawlerServicesContainer{
-		Broker:         c.PubSubBroker,
-		ReportManager:  c.ReportManager,
-		CrawlerHandler: NewCrawlerHandler(c.pageReportRepository, c.PubSubBroker, c.ReportManager),
-		ArchiveService: c.ArchiveService,
-		Config:         c.Config.Crawler,
+		Broker:          c.PubSubBroker,
+		ReportManager:   c.ReportManager,
+		CrawlerHandler:  NewCrawlerHandler(c.pageReportRepository, c.PubSubBroker, c.ReportManager),
+		ArchiveService:  c.ArchiveService,
+		Config:          c.Config.Crawler,
+		TargetValidator: c.APITargetPolicy,
+		Transport:       c.APITargetPolicy.Transport(),
 	}
 	repository := &struct {
 		*repository.CrawlRepository

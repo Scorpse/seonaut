@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -70,7 +71,10 @@ type ProjectStore interface {
 	PatchProject(context.Context, Principal, string, models.Project) (Project, error)
 }
 
-type ProjectManager struct{ Store ProjectStore }
+type ProjectManager struct {
+	Store   ProjectStore
+	Targets TargetValidator
+}
 
 func (m ProjectManager) PutProject(ctx context.Context, principal Principal, externalID, idempotencyKey string, input ProjectInput) (Project, bool, error) {
 	externalID, idempotencyKey = strings.TrimSpace(externalID), strings.TrimSpace(idempotencyKey)
@@ -83,6 +87,12 @@ func (m ProjectManager) PutProject(ctx context.Context, principal Principal, ext
 	model := input.model()
 	if err := projectvalidation.Prepare(&model); err != nil {
 		return Project{}, false, ErrInvalidProject
+	}
+	if m.Targets != nil {
+		target, _ := url.Parse(model.URL)
+		if err := m.Targets.ValidateURL(ctx, target); err != nil {
+			return Project{}, false, err
+		}
 	}
 	input = inputFromModel(model)
 	hash, err := HashProjectPut(externalID, input)
@@ -284,6 +294,8 @@ func writeProjectError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key is required")
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeError(w, r, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was reused with a different request")
+	case errors.Is(err, ErrTargetForbidden):
+		writeError(w, r, http.StatusBadRequest, "target_forbidden", "The crawl target is not allowed")
 	case errors.Is(err, ErrInvalidProject), errors.Is(err, projectvalidation.ErrProtocolNotSupported), errors.Is(err, projectvalidation.ErrUserAgent):
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The project request is invalid")
 	default:

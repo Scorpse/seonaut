@@ -150,6 +150,24 @@ func TestCrawlManagerMarksSynchronousStartFailure(t *testing.T) {
 	}
 }
 
+func TestCrawlManagerHoldsTenantSlotUntilCompletion(t *testing.T) {
+	store := &managerCrawlStore{crawl: APICrawl{ID: "crawl-a", TenantID: "tenant-a", ProjectID: "project-a", State: CrawlQueued}}
+	runner := &managerCrawlRunner{}
+	manager := CrawlManager{Store: store, Projects: managerProjectLookup{project: models.Project{Id: 7}}, Runner: runner, Slots: NewConcurrencyBudget(1, 2)}
+	principal := Principal{KeyID: "key-a", TenantID: "tenant-a"}
+	if _, _, err := manager.StartCrawl(context.Background(), principal, "project-a", "idem-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.StartCrawl(context.Background(), principal, "project-b", "idem-b"); !errors.Is(err, ErrCrawlQuotaExceeded) {
+		t.Fatalf("second crawl error = %v, want ErrCrawlQuotaExceeded", err)
+	}
+	runner.completion(&models.Crawl{Id: 44}, false, false, nil)
+	store.crawl.ID = "crawl-b"
+	if _, _, err := manager.StartCrawl(context.Background(), principal, "project-b", "idem-c"); err != nil {
+		t.Fatalf("slot not released after completion: %v", err)
+	}
+}
+
 func TestCrawlManagerCancelSignalsWorkerButPreservesTerminalCrawl(t *testing.T) {
 	store := &managerCrawlStore{crawl: APICrawl{ID: "crawl-a", TenantID: "tenant-a", ProjectID: "project-a", State: CrawlRunning}}
 	runner := &managerCrawlRunner{}

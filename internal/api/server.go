@@ -80,6 +80,9 @@ type Dependencies struct {
 	Findings     FindingService
 	CursorSecret []byte
 	Exports      ExportService
+	RateLimiter  RequestLimiter
+	Audit        AuditSink
+	ExportSlots  *ConcurrencyBudget
 }
 
 type server struct {
@@ -96,35 +99,40 @@ func NewHandler(deps Dependencies) http.Handler {
 func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	s := &server{deps: deps, mux: mux}
 	mux.Handle("GET /api/v1/health", requestIDMiddleware(http.HandlerFunc(s.health)))
-	mux.Handle("GET /api/v1/meta", requestIDMiddleware(http.HandlerFunc(s.meta)))
-	mux.Handle("POST /api/v1/root/platform-keys", requestIDMiddleware(http.HandlerFunc(s.createPlatformKey)))
-	mux.Handle("GET /api/v1/root/platform-keys", requestIDMiddleware(http.HandlerFunc(s.listPlatformKeys)))
-	mux.Handle("POST /api/v1/root/platform-keys/{key_id}/rotate", requestIDMiddleware(http.HandlerFunc(s.rotatePlatformKey)))
-	mux.Handle("POST /api/v1/root/platform-keys/{key_id}/revoke", requestIDMiddleware(http.HandlerFunc(s.revokePlatformKey)))
-	mux.Handle("PUT /api/v1/tenants/{external_tenant_id}", requestIDMiddleware(http.HandlerFunc(s.provisionTenant)))
-	mux.Handle("GET /api/v1/tenants/{external_tenant_id}", requestIDMiddleware(http.HandlerFunc(s.getTenant)))
-	mux.Handle("POST /api/v1/tenants/{external_tenant_id}/keys", requestIDMiddleware(http.HandlerFunc(s.issueInitialTenantKey)))
-	mux.Handle("POST /api/v1/keys", requestIDMiddleware(http.HandlerFunc(s.issueDelegatedKey)))
-	mux.Handle("GET /api/v1/keys", requestIDMiddleware(http.HandlerFunc(s.listTenantKeys)))
-	mux.Handle("POST /api/v1/keys/{key_id}/rotate", requestIDMiddleware(http.HandlerFunc(s.rotateTenantKey)))
-	mux.Handle("POST /api/v1/keys/{key_id}/revoke", requestIDMiddleware(http.HandlerFunc(s.revokeTenantKey)))
-	mux.Handle("PUT /api/v1/projects/{external_project_id}", requestIDMiddleware(http.HandlerFunc(s.putProject)))
-	mux.Handle("GET /api/v1/projects", requestIDMiddleware(http.HandlerFunc(s.listProjects)))
-	mux.Handle("GET /api/v1/projects/{project_id}", requestIDMiddleware(http.HandlerFunc(s.getProject)))
-	mux.Handle("PATCH /api/v1/projects/{project_id}", requestIDMiddleware(http.HandlerFunc(s.patchProject)))
-	mux.Handle("POST /api/v1/projects/{project_id}/crawls", requestIDMiddleware(http.HandlerFunc(s.startCrawl)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls", requestIDMiddleware(http.HandlerFunc(s.listCrawls)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}", requestIDMiddleware(http.HandlerFunc(s.getCrawl)))
-	mux.Handle("POST /api/v1/projects/{project_id}/crawls/{crawl_id}/cancel", requestIDMiddleware(http.HandlerFunc(s.cancelCrawl)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/issues", requestIDMiddleware(http.HandlerFunc(s.listIssues)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/pages", requestIDMiddleware(http.HandlerFunc(s.listPages)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/links", requestIDMiddleware(http.HandlerFunc(s.listLinks)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/resources", requestIDMiddleware(http.HandlerFunc(s.listResources)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/issues.csv", requestIDMiddleware(http.HandlerFunc(s.exportIssuesCSV)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/pages.csv", requestIDMiddleware(http.HandlerFunc(s.exportPagesCSV)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/resources.csv", requestIDMiddleware(http.HandlerFunc(s.exportResourcesCSV)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/sitemap.xml", requestIDMiddleware(http.HandlerFunc(s.exportSitemap)))
-	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/archive.wacz", requestIDMiddleware(http.HandlerFunc(s.exportArchive)))
+	mux.Handle("GET /api/v1/openapi.json", requestIDMiddleware(http.HandlerFunc(s.openAPI)))
+	s.register("GET /api/v1/meta", "meta.read", RateRead, s.meta)
+	s.register("POST /api/v1/root/platform-keys", "platform_keys.create", RateNone, s.createPlatformKey)
+	s.register("GET /api/v1/root/platform-keys", "platform_keys.list", RateRead, s.listPlatformKeys)
+	s.register("POST /api/v1/root/platform-keys/{key_id}/rotate", "platform_keys.rotate", RateNone, s.rotatePlatformKey)
+	s.register("POST /api/v1/root/platform-keys/{key_id}/revoke", "platform_keys.revoke", RateNone, s.revokePlatformKey)
+	s.register("PUT /api/v1/tenants/{external_tenant_id}", "tenants.provision", RateNone, s.provisionTenant)
+	s.register("GET /api/v1/tenants/{external_tenant_id}", "tenants.read", RateRead, s.getTenant)
+	s.register("POST /api/v1/tenants/{external_tenant_id}/keys", "tenant_keys.create_initial", RateNone, s.issueInitialTenantKey)
+	s.register("POST /api/v1/keys", "tenant_keys.create", RateNone, s.issueDelegatedKey)
+	s.register("GET /api/v1/keys", "tenant_keys.list", RateRead, s.listTenantKeys)
+	s.register("POST /api/v1/keys/{key_id}/rotate", "tenant_keys.rotate", RateNone, s.rotateTenantKey)
+	s.register("POST /api/v1/keys/{key_id}/revoke", "tenant_keys.revoke", RateNone, s.revokeTenantKey)
+	s.register("PUT /api/v1/projects/{external_project_id}", "projects.put", RateNone, s.putProject)
+	s.register("GET /api/v1/projects", "projects.list", RateRead, s.listProjects)
+	s.register("GET /api/v1/projects/{project_id}", "projects.read", RateRead, s.getProject)
+	s.register("PATCH /api/v1/projects/{project_id}", "projects.patch", RateNone, s.patchProject)
+	s.register("POST /api/v1/projects/{project_id}/crawls", "crawls.start", RateCrawl, s.startCrawl)
+	s.register("GET /api/v1/projects/{project_id}/crawls", "crawls.list", RateRead, s.listCrawls)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}", "crawls.read", RateRead, s.getCrawl)
+	s.register("POST /api/v1/projects/{project_id}/crawls/{crawl_id}/cancel", "crawls.cancel", RateNone, s.cancelCrawl)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/issues", "findings.issues", RateRead, s.listIssues)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/pages", "findings.pages", RateRead, s.listPages)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/links", "findings.links", RateRead, s.listLinks)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/resources", "findings.resources", RateRead, s.listResources)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/issues.csv", "exports.issues_csv", RateExport, s.exportIssuesCSV)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/pages.csv", "exports.pages_csv", RateExport, s.exportPagesCSV)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/resources.csv", "exports.resources_csv", RateExport, s.exportResourcesCSV)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/sitemap.xml", "exports.sitemap", RateExport, s.exportSitemap)
+	s.register("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/archive.wacz", "exports.archive", RateExport, s.exportArchive)
+}
+
+func (s *server) register(pattern, action string, class RateClass, handler http.HandlerFunc) {
+	s.mux.Handle(pattern, requestIDMiddleware(s.operationalMiddleware(action, class, handler)))
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {
@@ -156,12 +164,15 @@ func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 		"fork_revision":     s.deps.Build.ForkRevision,
 		"upstream_revision": s.deps.Build.UpstreamRevision,
 		"schema_version":    s.deps.Build.SchemaVersion,
-		"capabilities":      []string{"health", "meta", "key_management", "tenant_provisioning", "projects", "crawls", "findings", "exports"},
+		"capabilities":      []string{"health", "meta", "openapi", "key_management", "tenant_provisioning", "projects", "crawls", "findings", "exports", "audit", "rate_limits", "ssrf_protection"},
 		"request_id":        requestIDFrom(r.Context()),
 	})
 }
 
 func (s *server) authenticate(r *http.Request) (Principal, error) {
+	if result, ok := r.Context().Value(authenticationResultKey{}).(authenticationResult); ok {
+		return result.principal, result.err
+	}
 	if s.deps.Authenticate == nil {
 		return Principal{}, ErrUnauthenticated
 	}

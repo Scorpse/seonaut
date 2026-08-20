@@ -34,6 +34,9 @@ func NewServer(container *services.Container) {
 		Findings:     container.APIFindings,
 		CursorSecret: []byte(container.Config.API.CursorSecret),
 		Exports:      container.APIExports,
+		RateLimiter:  container.APIRateLimiter,
+		Audit:        container.APIAudit,
+		ExportSlots:  container.APIExportSlots,
 	})
 
 	// Handle static files

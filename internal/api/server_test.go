@@ -119,7 +119,7 @@ func TestMetaReturnsBuildProvenanceAndCapabilities(t *testing.T) {
 	if body.ForkVersion != "0.1.0" || body.ForkRevision != "fork-sha" || body.UpstreamRevision != "upstream-sha" || body.SchemaVersion != "76" {
 		t.Fatalf("unexpected provenance: %#v", body)
 	}
-	wantCapabilities := []string{"health", "meta", "key_management", "tenant_provisioning", "projects", "crawls", "findings", "exports"}
+	wantCapabilities := []string{"health", "meta", "openapi", "key_management", "tenant_provisioning", "projects", "crawls", "findings", "exports", "audit", "rate_limits", "ssrf_protection"}
 	if len(body.Capabilities) != len(wantCapabilities) {
 		t.Fatalf("capabilities = %#v", body.Capabilities)
 	}

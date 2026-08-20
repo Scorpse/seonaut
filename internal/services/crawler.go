@@ -33,36 +33,42 @@ type CrawlerServiceRepository interface {
 }
 
 type CrawlerServicesContainer struct {
-	Broker         *Broker
-	ReportManager  *ReportManager
-	CrawlerHandler *CrawlerHandler
-	ArchiveService *ArchiveService
-	Config         *config.CrawlerConfig
+	Broker          *Broker
+	ReportManager   *ReportManager
+	CrawlerHandler  *CrawlerHandler
+	ArchiveService  *ArchiveService
+	Config          *config.CrawlerConfig
+	TargetValidator crawler.TargetValidator
+	Transport       http.RoundTripper
 }
 
 type CrawlerService struct {
-	repository     CrawlerServiceRepository
-	config         *config.CrawlerConfig
-	broker         *Broker
-	reportManager  *ReportManager
-	crawlerHandler *CrawlerHandler
-	ArchiveService *ArchiveService
-	crawlers       map[int64]*crawler.Crawler
-	canceled       map[int64]bool
-	lock           *sync.RWMutex
+	repository      CrawlerServiceRepository
+	config          *config.CrawlerConfig
+	broker          *Broker
+	reportManager   *ReportManager
+	crawlerHandler  *CrawlerHandler
+	ArchiveService  *ArchiveService
+	targetValidator crawler.TargetValidator
+	transport       http.RoundTripper
+	crawlers        map[int64]*crawler.Crawler
+	canceled        map[int64]bool
+	lock            *sync.RWMutex
 }
 
 func NewCrawlerService(r CrawlerServiceRepository, s CrawlerServicesContainer) *CrawlerService {
 	return &CrawlerService{
-		repository:     r,
-		broker:         s.Broker,
-		config:         s.Config,
-		reportManager:  s.ReportManager,
-		crawlerHandler: s.CrawlerHandler,
-		ArchiveService: s.ArchiveService,
-		crawlers:       make(map[int64]*crawler.Crawler),
-		canceled:       make(map[int64]bool),
-		lock:           &sync.RWMutex{},
+		repository:      r,
+		broker:          s.Broker,
+		config:          s.Config,
+		reportManager:   s.ReportManager,
+		crawlerHandler:  s.CrawlerHandler,
+		ArchiveService:  s.ArchiveService,
+		targetValidator: s.TargetValidator,
+		transport:       s.Transport,
+		crawlers:        make(map[int64]*crawler.Crawler),
+		canceled:        make(map[int64]bool),
+		lock:            &sync.RWMutex{},
 	}
 }
 
@@ -236,7 +242,8 @@ func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.Bas
 	mainDomain := strings.TrimPrefix(u.Host, "www.")
 
 	httpClient := &http.Client{
-		Timeout: ClientTimeout * time.Second,
+		Timeout:   ClientTimeout * time.Second,
+		Transport: s.transport,
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -252,6 +259,8 @@ func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.Bas
 		BasicAuthDomains: []string{mainDomain, "www." + mainDomain},
 		AuthUser:         b.AuthUser,
 		AuthPass:         b.AuthPass,
+		TargetValidator:  s.targetValidator,
+		MaxResponseBytes: maxBodySize,
 	}, httpClient)
 
 	// Creates a new crawler with the crawler's response handler.

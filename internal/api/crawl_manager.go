@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
@@ -48,6 +49,8 @@ type CrawlManager struct {
 	Projects           CrawlProjectLookup
 	Runner             CrawlRunner
 	CompletionObserver CrawlCompletionObserver
+	Slots              *ConcurrencyBudget
+	Targets            TargetValidator
 	Now                func() time.Time
 }
 
@@ -59,9 +62,32 @@ func (m CrawlManager) StartCrawl(ctx context.Context, principal Principal, proje
 	if idempotencyKey == "" || len(idempotencyKey) > 191 {
 		return APICrawl{}, false, ErrIdempotencyKeyRequired
 	}
+	releaseSlot := func() {}
+	if m.Slots != nil {
+		var acquired bool
+		releaseSlot, acquired = m.Slots.Acquire(principal.TenantID)
+		if !acquired {
+			return APICrawl{}, false, ErrCrawlQuotaExceeded
+		}
+	}
+	slotOwned := true
+	defer func() {
+		if slotOwned {
+			releaseSlot()
+		}
+	}()
 	project, err := m.Projects.GetUpstreamProject(ctx, principal, projectID)
 	if err != nil {
 		return APICrawl{}, false, err
+	}
+	if m.Targets != nil {
+		target, parseErr := url.Parse(project.URL)
+		if parseErr != nil {
+			return APICrawl{}, false, ErrTargetForbidden
+		}
+		if err := m.Targets.ValidateURL(ctx, target); err != nil {
+			return APICrawl{}, false, err
+		}
 	}
 	hashBytes := sha256.Sum256([]byte("project_id=" + projectID))
 	crawl, replayed, err := m.Store.ReserveCrawl(ctx, principal, projectID, idempotencyKey, hex.EncodeToString(hashBytes[:]))
@@ -71,6 +97,7 @@ func (m CrawlManager) StartCrawl(ctx context.Context, principal Principal, proje
 
 	startedAt := m.now()
 	completion := func(upstream *models.Crawl, canceled, archiveReady bool, runErr error) {
+		defer releaseSlot()
 		result := CrawlCompletion{State: CrawlSucceeded, FinishedAt: m.now(), ArchiveReady: archiveReady}
 		bindingFailed := false
 		if upstream != nil {
@@ -112,6 +139,7 @@ func (m CrawlManager) StartCrawl(ctx context.Context, principal Principal, proje
 		_ = m.Store.CompleteCrawl(context.Background(), principal.TenantID, crawl.ID, CrawlCompletion{State: CrawlFailed, FinishedAt: m.now(), FailureCode: "state_persist_failed", FailureMessage: "Crawl state could not be persisted"})
 		return APICrawl{}, false, err
 	}
+	slotOwned = false
 	crawl.State, crawl.StartedAt = CrawlRunning, &startedAt
 	return crawl, false, nil
 }
