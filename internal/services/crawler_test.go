@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stjudewashere/seonaut/internal/config"
 	"github.com/stjudewashere/seonaut/internal/models"
@@ -11,6 +12,35 @@ import (
 // crawlerTestRepository is a minimal mock that counts SaveCrawl calls.
 type crawlerTestRepository struct {
 	saveCrawlCount int
+}
+
+func TestStartCrawlerObservedReturnsUpstreamIDAndCompletes(t *testing.T) {
+	repo := &crawlerTestRepository{}
+	svc := newTestCrawlerService(repo)
+	done := make(chan struct {
+		crawl    *models.Crawl
+		canceled bool
+		err      error
+	}, 1)
+	project := models.Project{Id: 99, URL: "http://localhost:1"}
+	crawl, err := svc.StartCrawlerObserved(project, models.BasicAuth{}, func(crawl *models.Crawl, canceled bool, err error) {
+		done <- struct {
+			crawl    *models.Crawl
+			canceled bool
+			err      error
+		}{crawl: crawl, canceled: canceled, err: err}
+	})
+	if err != nil || crawl == nil || crawl.Id != 1 {
+		t.Fatalf("crawl=%+v err=%v", crawl, err)
+	}
+	select {
+	case result := <-done:
+		if result.crawl == nil || result.crawl.Id != 1 || result.canceled || result.err != nil {
+			t.Fatalf("completion=%+v", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("crawler completion callback was not called")
+	}
 }
 
 func (r *crawlerTestRepository) SaveCrawl(p models.Project) (*models.Crawl, error) {
@@ -32,7 +62,7 @@ func (r *crawlerTestRepository) CountIssuesByPriority(crawlId int64, priority in
 	return 0
 }
 
-func (r *crawlerTestRepository) UpdateCrawl(c *models.Crawl) {}
+func (r *crawlerTestRepository) UpdateCrawl(c *models.Crawl) error { return nil }
 
 type crawlerHandlerTestRepository struct{}
 

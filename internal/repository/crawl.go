@@ -17,7 +17,10 @@ type CrawlRepository struct {
 // SaveCrawl inserts a new crawl into the database and returns a new Crawl model with
 // the data provided by the project.
 func (ds *CrawlRepository) SaveCrawl(p models.Project) (*models.Crawl, error) {
-	stmt, _ := ds.DB.Prepare("INSERT INTO crawls (project_id) VALUES (?)")
+	stmt, err := ds.DB.Prepare("INSERT INTO crawls (project_id) VALUES (?)")
+	if err != nil {
+		return nil, err
+	}
 	defer stmt.Close()
 	res, err := stmt.Exec(p.Id)
 
@@ -235,6 +238,9 @@ func (ds *CrawlRepository) DeleteUnfinishedCrawls() {
 			crawls.id
 		FROM crawls
 		WHERE crawls.issues_end IS NULL
+		AND NOT EXISTS (
+			SELECT 1 FROM api_crawls WHERE api_crawls.upstream_crawl_id = crawls.id
+		)
 	`
 	count := 0
 
@@ -276,7 +282,7 @@ func (ds *CrawlRepository) DeleteUnfinishedCrawls() {
 
 // SaveIssuesCount stores the total number of issues as well as the total issues by priority for
 // the crawl specified in the "crawlId" parameter.
-func (ds *CrawlRepository) UpdateCrawl(crawl *models.Crawl) {
+func (ds *CrawlRepository) UpdateCrawl(crawl *models.Crawl) error {
 	query := `UPDATE
 		crawls
 		SET 
@@ -325,4 +331,5 @@ func (ds *CrawlRepository) UpdateCrawl(crawl *models.Crawl) {
 	if err != nil {
 		log.Printf("SaveIssuesCount: %v\n", err)
 	}
+	return err
 }

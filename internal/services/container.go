@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"time"
 
 	"github.com/stjudewashere/seonaut/internal/api"
 	"github.com/stjudewashere/seonaut/internal/config"
@@ -41,6 +42,7 @@ type Container struct {
 	APIKeyManager      api.KeyManager
 	APITenantManager   api.TenantManager
 	APIProjectManager  api.ProjectManager
+	APICrawlManager    api.CrawlManager
 
 	db                   *sql.DB
 	issueRepository      *repository.IssueRepository
@@ -53,6 +55,7 @@ type Container struct {
 	apiKeyRepository     *repository.APIKeyRepository
 	apiTenantRepository  *repository.APITenantRepository
 	apiProjectRepository *repository.APIProjectRepository
+	apiCrawlRepository   *repository.APICrawlRepository
 }
 
 func (c *Container) Ready(ctx context.Context) error {
@@ -131,8 +134,13 @@ func (c *Container) InitRepositories() {
 	c.apiKeyRepository = &repository.APIKeyRepository{DB: c.db}
 	c.apiTenantRepository = &repository.APITenantRepository{DB: c.db}
 	c.apiProjectRepository = &repository.APIProjectRepository{DB: c.db}
+	c.apiCrawlRepository = &repository.APICrawlRepository{DB: c.db}
 
-	// Clean up unfinished crawls.
+	if _, err := c.apiCrawlRepository.RecoverInterruptedCrawls(context.Background(), time.Now().UTC()); err != nil {
+		log.Printf("Recover interrupted API crawls: %v", err)
+	}
+	// Clean up unfinished UI crawls. API crawl rows and partial findings survive
+	// restart recovery for machine inspection.
 	c.crawlRepository.DeleteUnfinishedCrawls()
 }
 
@@ -140,6 +148,7 @@ func (c *Container) InitAPIServices() {
 	c.APIAuthenticator, c.APIKeyManager = NewAPIServices(c.Config.API, c.apiKeyRepository)
 	c.APITenantManager = api.TenantManager{Store: c.apiTenantRepository, Keys: c.APIKeyManager}
 	c.APIProjectManager = api.ProjectManager{Store: c.apiProjectRepository}
+	c.APICrawlManager = api.CrawlManager{Store: c.apiCrawlRepository, Projects: c.apiProjectRepository}
 }
 
 // Create the PubSub broker.
@@ -238,6 +247,7 @@ func (c *Container) InitCrawlerService() {
 	}
 
 	c.CrawlerService = NewCrawlerService(repository, crawlerServices)
+	c.APICrawlManager.Runner = c.CrawlerService
 }
 
 // Create the dashboCallbackBuilderard service.

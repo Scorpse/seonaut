@@ -28,7 +28,7 @@ type CrawlerServiceRepository interface {
 	DeleteCrawlData(c *models.Crawl)
 
 	CountIssuesByPriority(int64, int) int
-	UpdateCrawl(*models.Crawl)
+	UpdateCrawl(*models.Crawl) error
 }
 
 type CrawlerServicesContainer struct {
@@ -47,6 +47,7 @@ type CrawlerService struct {
 	crawlerHandler *CrawlerHandler
 	ArchiveService *ArchiveService
 	crawlers       map[int64]*crawler.Crawler
+	canceled       map[int64]bool
 	lock           *sync.RWMutex
 }
 
@@ -59,6 +60,7 @@ func NewCrawlerService(r CrawlerServiceRepository, s CrawlerServicesContainer) *
 		crawlerHandler: s.CrawlerHandler,
 		ArchiveService: s.ArchiveService,
 		crawlers:       make(map[int64]*crawler.Crawler),
+		canceled:       make(map[int64]bool),
 		lock:           &sync.RWMutex{},
 	}
 }
@@ -68,9 +70,16 @@ func NewCrawlerService(r CrawlerServiceRepository, s CrawlerServicesContainer) *
 // running or if there's an error creating it.
 // Finally the previous crawl's data is removed and the crawl is returned.
 func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) error {
+	_, err := s.StartCrawlerObserved(p, b, nil)
+	return err
+}
+
+// StartCrawlerObserved preserves the HTML crawl behavior while exposing the
+// upstream crawl ID and one terminal callback to API callers.
+func (s *CrawlerService) StartCrawlerObserved(p models.Project, b models.BasicAuth, completed func(*models.Crawl, bool, error)) (*models.Crawl, error) {
 	u, err := url.Parse(p.URL)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if u.Path == "" {
@@ -82,7 +91,7 @@ func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) erro
 	// end timestamp.
 	c, err := s.addCrawler(u, &p, &b)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	previousCrawl := s.repository.GetLastCrawl(&p)
@@ -90,11 +99,22 @@ func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) erro
 	crawl, err := s.repository.SaveCrawl(p)
 	if err != nil {
 		s.removeCrawler(&p)
-		return err
+		return nil, err
 	}
 
 	go func() {
-		defer s.removeCrawler(&p)
+		var runErr error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				runErr = fmt.Errorf("crawler panic: %v", recovered)
+				log.Printf("Crawler for %s failed: %v", p.URL, runErr)
+			}
+			canceled := s.crawlerCanceled(&p)
+			s.removeCrawler(&p)
+			if completed != nil {
+				completed(crawl, canceled, runErr)
+			}
+		}()
 		defer s.repository.DeleteCrawlData(&previousCrawl)
 
 		callback := s.crawlerHandler.responseCallback(crawl, &p, c)
@@ -132,12 +152,15 @@ func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) erro
 		crawl.WarningIssues = s.repository.CountIssuesByPriority(crawl.Id, Warning)
 		crawl.TotalIssues = crawl.CriticalIssues + crawl.AlertIssues + crawl.WarningIssues
 
-		s.repository.UpdateCrawl(crawl)
+		runErr = s.repository.UpdateCrawl(crawl)
+		if runErr != nil {
+			log.Printf("Persist crawl %d: %v", crawl.Id, runErr)
+		}
 		s.broker.Publish(fmt.Sprintf("crawl-%d", p.Id), &models.Message{Name: "CrawlEnd", Data: crawl.TotalURLs})
 		log.Printf("Crawled %d urls in %s", crawl.TotalURLs, p.URL)
 	}()
 
-	return nil
+	return crawl, nil
 }
 
 // Get a slice with 'LastCrawlsLimit' number of the crawls
@@ -161,6 +184,7 @@ func (s *CrawlerService) StopCrawler(p models.Project) {
 		return
 	}
 
+	s.canceled[p.Id] = true
 	crawler.Stop()
 }
 
@@ -207,6 +231,7 @@ func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.Bas
 
 	// Creates a new crawler with the crawler's response handler.
 	s.crawlers[p.Id] = crawler.NewCrawler(u, options, client)
+	s.canceled[p.Id] = false
 
 	return s.crawlers[p.Id], nil
 }
@@ -217,4 +242,11 @@ func (s *CrawlerService) removeCrawler(p *models.Project) {
 	defer s.lock.Unlock()
 
 	delete(s.crawlers, p.Id)
+	delete(s.canceled, p.Id)
+}
+
+func (s *CrawlerService) crawlerCanceled(p *models.Project) bool {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return s.canceled[p.Id]
 }

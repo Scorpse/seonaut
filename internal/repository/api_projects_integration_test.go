@@ -91,4 +91,70 @@ func TestAPIProjectRepositoryMySQLTenantIsolationAndIdempotency(t *testing.T) {
 	if _, _, err := repository.PutProject(ctx, principalA, "site", "idem-a", "different", inputA); !errors.Is(err, api.ErrIdempotencyConflict) {
 		t.Fatalf("conflict err=%v", err)
 	}
+
+	crawlRepository := APICrawlRepository{DB: db, Now: func() time.Time { return now }}
+	crawlA, replayed, err := crawlRepository.ReserveCrawl(ctx, principalA, projectA.ID, "crawl-idem-a", "crawl-hash-a")
+	if err != nil || replayed {
+		t.Fatalf("reserve crawl=%+v replayed=%v err=%v", crawlA, replayed, err)
+	}
+	replayCrawl, replayed, err := crawlRepository.ReserveCrawl(ctx, principalA, projectA.ID, "crawl-idem-a", "crawl-hash-a")
+	if err != nil || !replayed || replayCrawl.ID != crawlA.ID {
+		t.Fatalf("crawl replay=%+v replayed=%v err=%v", replayCrawl, replayed, err)
+	}
+	if _, _, err := crawlRepository.ReserveCrawl(ctx, principalA, projectA.ID, "crawl-idem-b", "crawl-hash-b"); !errors.Is(err, api.ErrCrawlAlreadyActive) {
+		t.Fatalf("second active err=%v", err)
+	}
+
+	var upstreamProjectA int64
+	if err := db.QueryRowContext(ctx, `SELECT upstream_project_id FROM api_projects WHERE id = ?`, projectA.ID).Scan(&upstreamProjectA); err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.ExecContext(ctx, `INSERT INTO crawls (project_id) VALUES (?)`, upstreamProjectA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamCrawlA, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := crawlRepository.MarkCrawlRunning(ctx, principalA, crawlA.ID, upstreamCrawlA, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := crawlRepository.GetCrawl(ctx, principalB, projectB.ID, crawlA.ID); !errors.Is(err, api.ErrCrawlNotFound) {
+		t.Fatalf("foreign crawl err=%v", err)
+	}
+	canceled, err := crawlRepository.RequestCancel(ctx, principalA, projectA.ID, crawlA.ID, now)
+	if err != nil || !canceled.CancelRequested {
+		t.Fatalf("cancel=%+v err=%v", canceled, err)
+	}
+	if _, err := crawlRepository.RequestCancel(ctx, principalA, projectA.ID, crawlA.ID, now); err != nil {
+		t.Fatalf("repeat cancel err=%v", err)
+	}
+	if err := crawlRepository.CompleteCrawl(ctx, principalA.TenantID, crawlA.ID, api.CrawlCompletion{State: api.CrawlCanceled, FinishedAt: now, TotalURLs: 4, TotalIssues: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := crawlRepository.CompleteCrawl(ctx, principalA.TenantID, crawlA.ID, api.CrawlCompletion{State: api.CrawlSucceeded, FinishedAt: now, TotalURLs: 9}); err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := crawlRepository.GetCrawl(ctx, principalA, projectA.ID, crawlA.ID)
+	if err != nil || terminal.State != api.CrawlCanceled {
+		t.Fatalf("terminal=%+v err=%v", terminal, err)
+	}
+
+	interrupted, _, err := crawlRepository.ReserveCrawl(ctx, principalA, projectA.ID, "crawl-idem-c", "crawl-hash-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := crawlRepository.RecoverInterruptedCrawls(ctx, now.Add(time.Minute)); err != nil || count != 1 {
+		t.Fatalf("recovered=%d err=%v", count, err)
+	}
+	recovered, err := crawlRepository.GetCrawl(ctx, principalA, projectA.ID, interrupted.ID)
+	if err != nil || recovered.State != api.CrawlFailed || recovered.FailureCode != "worker_restarted" {
+		t.Fatalf("recovered=%+v err=%v", recovered, err)
+	}
+	(&CrawlRepository{DB: db}).DeleteUnfinishedCrawls()
+	var preserved int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM crawls WHERE id = ?`, upstreamCrawlA).Scan(&preserved); err != nil || preserved != 1 {
+		t.Fatalf("partial API crawl was deleted: count=%d err=%v", preserved, err)
+	}
 }

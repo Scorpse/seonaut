@@ -25,6 +25,8 @@ const (
 	patchUpstreamAPIProjectSQL  = `UPDATE projects p JOIN api_projects ap ON ap.upstream_project_id = p.id JOIN api_tenants atn ON atn.id = ap.tenant_id AND atn.upstream_user_id = p.user_id SET p.ignore_robotstxt = ?, p.follow_nofollow = ?, p.include_noindex = ?, p.crawl_sitemap = ?, p.allow_subdomains = ?, p.basic_auth = ?, p.check_external_links = ?, p.archive = ?, p.user_agent = ?, ap.updated_at = ? WHERE ap.tenant_id = ? AND ap.id = ?`
 )
 
+const getUpstreamAPIProjectSQL = `SELECT p.id, p.url, p.ignore_robotstxt, p.follow_nofollow, p.include_noindex, p.crawl_sitemap, p.allow_subdomains, p.basic_auth, p.check_external_links, p.archive, p.user_agent FROM api_projects ap JOIN api_tenants atn ON atn.id = ap.tenant_id AND atn.upstream_user_id = ap.upstream_user_id JOIN projects p ON p.id = ap.upstream_project_id AND p.user_id = ap.upstream_user_id WHERE ap.tenant_id = ? AND ap.id = ? LIMIT 1`
+
 type APIProjectRepository struct {
 	DB  *sql.DB
 	Now func() time.Time
@@ -134,6 +136,18 @@ func (r APIProjectRepository) GetProject(ctx context.Context, principal api.Prin
 		return api.Project{}, api.ErrProjectNotFound
 	}
 	return getAPIProject(ctx, r.DB, principal, projectID, false)
+}
+
+func (r APIProjectRepository) GetUpstreamProject(ctx context.Context, principal api.Principal, projectID string) (models.Project, error) {
+	if r.DB == nil || principal.TenantID == "" || principal.ProjectID != "" && principal.ProjectID != projectID {
+		return models.Project{}, api.ErrProjectNotFound
+	}
+	var project models.Project
+	err := r.DB.QueryRowContext(ctx, getUpstreamAPIProjectSQL, principal.TenantID, projectID).Scan(&project.Id, &project.URL, &project.IgnoreRobotsTxt, &project.FollowNofollow, &project.IncludeNoindex, &project.CrawlSitemap, &project.AllowSubdomains, &project.BasicAuth, &project.CheckExternalLinks, &project.Archive, &project.UserAgent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.Project{}, api.ErrProjectNotFound
+	}
+	return project, err
 }
 
 func (r APIProjectRepository) PatchProject(ctx context.Context, principal api.Principal, projectID string, project models.Project) (api.Project, error) {

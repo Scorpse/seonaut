@@ -9,6 +9,7 @@ import (
 
 const (
 	operationPutProject  = "projects.put"
+	operationStartCrawl  = "crawls.start"
 	findIdempotencySQL   = `SELECT request_hash, resource_id FROM api_idempotency WHERE key_public_id = ? AND operation = ? AND idempotency_key = ? LIMIT 1 FOR UPDATE`
 	insertIdempotencySQL = `INSERT INTO api_idempotency (key_public_id, tenant_id, operation, idempotency_key, request_hash, resource_type, resource_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )

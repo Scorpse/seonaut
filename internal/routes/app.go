@@ -30,6 +30,7 @@ func NewServer(container *services.Container) {
 		PlatformKeys: container.APIKeyManager,
 		Tenants:      container.APITenantManager,
 		Projects:     container.APIProjectManager,
+		Crawls:       container.APICrawlManager,
 	})
 
 	// Handle static files

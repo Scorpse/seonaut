@@ -112,11 +112,11 @@
 **Interfaces:**
 - Produces: start/list/status/cancel routes and durable `queued|running|succeeded|failed|canceled` records.
 
-- [ ] Write tests for one active crawl, replay by idempotency key, cancel idempotency, foreign IDs as `404`, terminal-state monotonicity, and startup conversion to `worker_restarted` without deleting partial crawl data.
-- [ ] Verify red tests.
-- [ ] Extract a crawler-start result that exposes the upstream crawl ID while preserving the HTML caller.
-- [ ] Persist API crawl state around the existing crawler lifecycle and remove fork crawls from upstream destructive startup cleanup.
-- [ ] Run focused and race tests; commit `MKT-281 add durable API crawl lifecycle`.
+- [x] Write tests for one active crawl, replay by idempotency key, cancel idempotency, foreign IDs as `404`, terminal-state monotonicity, and startup conversion to `worker_restarted` without deleting partial crawl data.
+- [x] Verify red tests.
+- [x] Extract a crawler-start result that exposes the upstream crawl ID while preserving the HTML caller.
+- [x] Persist API crawl state around the existing crawler lifecycle and remove fork crawls from upstream destructive startup cleanup.
+- [x] Run focused and race tests; commit `MKT-281 add durable API crawl lifecycle`.
 
 ### Task 6: Findings, pages, links, resources, and exports
 
