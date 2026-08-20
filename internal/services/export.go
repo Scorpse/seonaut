@@ -268,31 +268,30 @@ func (e *Exporter) ExportHreflangs(f io.Writer, crawl *models.Crawl) {
 func (e *Exporter) ExportAllIssues(lang string, f io.Writer, crawl *models.Crawl) {
 	w := csv.NewWriter(f)
 
-	w.Write([]string{
-		"URL",
-		"Issue Type",
-		"Priority",
-	})
+	w.Write(e.issueCSVHeader())
 
 	vStream := e.repository.ExportIssues(crawl)
 
 	for v := range vStream {
-		priority := "Warning"
-		switch v.Priority {
-		case Critical:
-			priority = "Critical"
-		case Alert:
-			priority = "Alert"
-		}
-
-		w.Write([]string{
-			v.Url,
-			e.translator.Trans(lang, v.Type),
-			priority,
-		})
+		w.Write(e.issueCSVRow(lang, v))
 	}
 
 	w.Flush()
+}
+
+func (e *Exporter) issueCSVHeader() []string {
+	return []string{"URL", "Issue Type", "Priority"}
+}
+
+func (e *Exporter) issueCSVRow(lang string, issue *models.ExportIssue) []string {
+	priority := "Warning"
+	switch issue.Priority {
+	case Critical:
+		priority = "Critical"
+	case Alert:
+		priority = "Alert"
+	}
+	return []string{issue.Url, e.translator.Trans(lang, issue.Type), priority}
 }
 
 // ExportPageReports exports the pagereport data for all the pageReports that are received
@@ -300,48 +299,24 @@ func (e *Exporter) ExportAllIssues(lang string, f io.Writer, crawl *models.Crawl
 // or only the pageReports with specific issues in a crawl.
 func (e *Exporter) ExportPageReports(f io.Writer, prStream <-chan *models.PageReport) {
 	writer := csv.NewWriter(f)
-	writer.Write([]string{
-		"Status Code",
-		"URL",
-		"Redirect URL",
-		"Content Type",
-		"Canonical",
-		"Lang",
-		"Title",
-		"Title Length",
-		"Description",
-		"Description Length",
-		"Robots",
-		"Header 1",
-		"Header 2",
-		"Size",
-		"Nº of words",
-		"Depth",
-		"TTFB",
-	})
+	writer.Write(e.pageReportCSVHeader())
 
 	for r := range prStream {
-		writer.Write([]string{
-			fmt.Sprintf("%d", r.StatusCode),
-			r.URL,
-			r.RedirectURL,
-			r.ContentType,
-			r.Canonical,
-			r.Lang,
-			r.Title,
-			fmt.Sprint(utf8.RuneCount([]byte(r.Title))),
-			r.Description,
-			fmt.Sprint(utf8.RuneCount([]byte(r.Description))),
-			r.Robots,
-			r.H1,
-			r.H2,
-			fmt.Sprintf("%.1f KB", e.byteToKByte(r.Size)),
-			strconv.Itoa(r.Words),
-			fmt.Sprintf("%d", r.Depth),
-			fmt.Sprintf("%d ms", r.TTFB),
-		})
+		writer.Write(e.pageReportCSVRow(r))
 
 		writer.Flush()
+	}
+}
+
+func (e *Exporter) pageReportCSVHeader() []string {
+	return []string{"Status Code", "URL", "Redirect URL", "Content Type", "Canonical", "Lang", "Title", "Title Length", "Description", "Description Length", "Robots", "Header 1", "Header 2", "Size", "Nº of words", "Depth", "TTFB"}
+}
+
+func (e *Exporter) pageReportCSVRow(report *models.PageReport) []string {
+	return []string{
+		fmt.Sprintf("%d", report.StatusCode), report.URL, report.RedirectURL, report.ContentType, report.Canonical, report.Lang,
+		report.Title, fmt.Sprint(utf8.RuneCount([]byte(report.Title))), report.Description, fmt.Sprint(utf8.RuneCount([]byte(report.Description))),
+		report.Robots, report.H1, report.H2, fmt.Sprintf("%.1f KB", e.byteToKByte(report.Size)), strconv.Itoa(report.Words), fmt.Sprintf("%d", report.Depth), fmt.Sprintf("%d ms", report.TTFB),
 	}
 }
 

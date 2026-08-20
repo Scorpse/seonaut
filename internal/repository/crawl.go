@@ -199,6 +199,23 @@ func (ds *CrawlRepository) DeleteCrawlData(crawl *models.Crawl) {
 	deleteFunc(crawl.Id, "pagereports")
 }
 
+// DeleteCrawlDataIfUnreferenced retains durable API crawl results while
+// preserving the UI cleanup policy for unowned crawl data.
+func (ds *CrawlRepository) DeleteCrawlDataIfUnreferenced(crawl *models.Crawl) {
+	if crawl == nil || crawl.Id == 0 {
+		return
+	}
+	var referenced bool
+	if err := ds.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM api_crawls WHERE upstream_crawl_id = ?)`, crawl.Id).Scan(&referenced); err != nil {
+		log.Printf("DeleteCrawlDataIfUnreferenced: cid %d: %v\n", crawl.Id, err)
+		return
+	}
+	if referenced {
+		return
+	}
+	ds.DeleteCrawlData(crawl)
+}
+
 // DeleteProjectCrawls deletes all of the project's crawls and associated data.
 func (ds *CrawlRepository) DeleteProjectCrawls(p *models.Project) {
 	query := `

@@ -15,6 +15,7 @@ type managerCrawlStore struct {
 	reserveErr error
 	completed  []CrawlCompletion
 	runningID  int64
+	events     *[]string
 }
 
 func (s *managerCrawlStore) ReserveCrawl(context.Context, Principal, string, string, string) (APICrawl, bool, error) {
@@ -25,6 +26,9 @@ func (s *managerCrawlStore) MarkCrawlRunning(_ context.Context, _ Principal, _ s
 	return nil
 }
 func (s *managerCrawlStore) CompleteCrawl(_ context.Context, _ string, _ string, completion CrawlCompletion) error {
+	if s.events != nil {
+		*s.events = append(*s.events, "terminal")
+	}
 	s.completed = append(s.completed, completion)
 	return nil
 }
@@ -51,24 +55,58 @@ func (l managerProjectLookup) GetUpstreamProject(context.Context, Principal, str
 type managerCrawlRunner struct {
 	started    int
 	stopped    int
-	completion func(*models.Crawl, bool, error)
+	completion func(*models.Crawl, bool, bool, error)
 	startErr   error
+	immediate  bool
 }
 
-func (r *managerCrawlRunner) StartCrawlerObserved(_ models.Project, _ models.BasicAuth, completion func(*models.Crawl, bool, error)) (*models.Crawl, error) {
+type managerCompletionObserver struct {
+	projectID  string
+	crawlID    string
+	project    models.Project
+	completion CrawlCompletion
+	events     *[]string
+}
+
+func (o *managerCompletionObserver) CrawlCompleted(_ context.Context, _ Principal, projectID, crawlID string, project models.Project, completion CrawlCompletion) {
+	if o.events != nil {
+		*o.events = append(*o.events, "archive")
+	}
+	o.projectID, o.crawlID, o.project, o.completion = projectID, crawlID, project, completion
+}
+
+func (r *managerCrawlRunner) StartCrawlerObserved(_ models.Project, _ models.BasicAuth, _ string, completion func(*models.Crawl, bool, bool, error)) (*models.Crawl, error) {
 	r.started++
 	r.completion = completion
 	if r.startErr != nil {
 		return nil, r.startErr
 	}
-	return &models.Crawl{Id: 44}, nil
+	upstream := &models.Crawl{Id: 44}
+	if r.immediate {
+		completion(upstream, false, false, nil)
+	}
+	return upstream, nil
+}
+
+func TestCrawlManagerBindsUpstreamIDBeforeImmediateCompletion(t *testing.T) {
+	store := &managerCrawlStore{crawl: APICrawl{ID: "crawl-fast", TenantID: "tenant-a", ProjectID: "project-a", State: CrawlQueued}}
+	runner := &managerCrawlRunner{immediate: true}
+	manager := CrawlManager{Store: store, Projects: managerProjectLookup{project: models.Project{Id: 7}}, Runner: runner}
+	if _, _, err := manager.StartCrawl(context.Background(), Principal{KeyID: "key-a", TenantID: "tenant-a"}, "project-a", "idem-fast"); err != nil {
+		t.Fatal(err)
+	}
+	if store.runningID != 44 || len(store.completed) != 1 || store.completed[0].State != CrawlSucceeded {
+		t.Fatalf("runningID=%d completed=%+v", store.runningID, store.completed)
+	}
 }
 func (r *managerCrawlRunner) StopCrawler(models.Project) { r.stopped++ }
 
 func TestCrawlManagerPersistsRunningAndTerminalStates(t *testing.T) {
-	store := &managerCrawlStore{crawl: APICrawl{ID: "crawl-a", TenantID: "tenant-a", ProjectID: "project-a", State: CrawlQueued}}
+	events := []string{}
+	store := &managerCrawlStore{crawl: APICrawl{ID: "crawl-a", TenantID: "tenant-a", ProjectID: "project-a", State: CrawlQueued}, events: &events}
 	runner := &managerCrawlRunner{}
-	manager := CrawlManager{Store: store, Projects: managerProjectLookup{project: models.Project{Id: 7, URL: "https://example.com"}}, Runner: runner, Now: func() time.Time { return time.Unix(2, 0).UTC() }}
+	observer := &managerCompletionObserver{events: &events}
+	manager := CrawlManager{Store: store, Projects: managerProjectLookup{project: models.Project{Id: 7, URL: "https://example.com"}}, Runner: runner, CompletionObserver: observer, Now: func() time.Time { return time.Unix(2, 0).UTC() }}
 	principal := Principal{KeyID: "key-a", TenantID: "tenant-a"}
 	crawl, replayed, err := manager.StartCrawl(context.Background(), principal, "project-a", "idem-a")
 	if err != nil || replayed || crawl.ID != "crawl-a" {
@@ -77,9 +115,15 @@ func TestCrawlManagerPersistsRunningAndTerminalStates(t *testing.T) {
 	if store.runningID != 44 || runner.completion == nil {
 		t.Fatalf("runningID=%d completion=%v", store.runningID, runner.completion != nil)
 	}
-	runner.completion(&models.Crawl{Id: 44, TotalURLs: 8, TotalIssues: 3}, false, nil)
+	runner.completion(&models.Crawl{Id: 44, TotalURLs: 8, TotalIssues: 3}, false, true, nil)
 	if len(store.completed) != 1 || store.completed[0].State != CrawlSucceeded || store.completed[0].TotalURLs != 8 {
 		t.Fatalf("completed=%+v", store.completed)
+	}
+	if observer.projectID != "project-a" || observer.crawlID != "crawl-a" || observer.project.Id != 7 || observer.completion.State != CrawlSucceeded || !observer.completion.ArchiveReady {
+		t.Fatalf("observer=%+v", observer)
+	}
+	if len(events) != 2 || events[0] != "archive" || events[1] != "terminal" {
+		t.Fatalf("events=%v", events)
 	}
 }
 

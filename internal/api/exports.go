@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -83,7 +84,9 @@ func (s *server) streamExport(w http.ResponseWriter, r *http.Request, kind Expor
 	w.Header().Set("Content-Type", prepared.ContentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", safeExportFilename(prepared.Filename)))
 	w.WriteHeader(http.StatusOK)
-	_ = prepared.WriteTo(w)
+	if err := prepared.WriteTo(w); err != nil {
+		log.Printf("API export stream failed request_id=%s kind=%s: %v", requestIDFrom(r.Context()), kind, err)
+	}
 }
 
 func (s *server) exportArchive(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +121,9 @@ func (s *server) exportArchive(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(prepared.Size, 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, prepared.Reader)
+	if _, err := io.Copy(w, prepared.Reader); err != nil {
+		log.Printf("API archive stream failed request_id=%s: %v", requestIDFrom(r.Context()), err)
+	}
 }
 
 func (s *server) requireExportScope(w http.ResponseWriter, r *http.Request) (Principal, bool) {

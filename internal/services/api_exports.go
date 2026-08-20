@@ -2,17 +2,19 @@ package services
 
 import (
 	"context"
+	"encoding/csv"
+	"encoding/xml"
 	"errors"
 	"io"
+	"log"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/stjudewashere/seonaut/internal/api"
 	"github.com/stjudewashere/seonaut/internal/models"
 	"github.com/stjudewashere/seonaut/internal/repository"
-	"github.com/turk/go-sitemap"
 )
 
 type APIExportStore interface {
@@ -22,68 +24,233 @@ type APIExportStore interface {
 	FailArchive(context.Context, api.Principal, string, string, string) error
 }
 
-type APIExportReports interface {
-	FindAllPageReportsByCrawlId(int64) <-chan *models.PageReport
-	FindSitemapPageReports(int64) <-chan *models.PageReport
+type APIExportCleanupStore interface {
+	ListExpiredArchives(context.Context, time.Time) ([]repository.APIExportJob, error)
+	DeleteExpiredArchive(context.Context, string, time.Time) error
 }
 
 type APIArchiveLocator interface {
-	GetArchiveFilePath(*models.Project) (string, error)
+	GetAPIArchiveFilePath(*models.Project, string) (string, error)
+}
+
+type APIArchiveCleaner interface {
+	DeleteAPIArchive(string) error
 }
 
 type APIExportManager struct {
-	Store       APIExportStore
-	Exporter    *Exporter
-	Reports     APIExportReports
-	Archives    APIArchiveLocator
-	ArtifactDir string
-	RunAsync    func(func())
-	inflight    sync.Map
+	Store    APIExportStore
+	Findings api.FindingService
+	Exporter *Exporter
+	Archives APIArchiveLocator
+	inflight sync.Map
+}
+
+// CrawlCompleted snapshots the project-scoped archive before another crawl can
+// reuse that path. The crawler keeps the project locked until this returns.
+func (m *APIExportManager) CrawlCompleted(ctx context.Context, principal api.Principal, projectID, crawlID string, project models.Project, completion api.CrawlCompletion) {
+	if m == nil || m.Store == nil || m.Archives == nil {
+		return
+	}
+	defer func() {
+		if err := m.PurgeExpiredArchives(context.Background(), time.Now().UTC()); err != nil {
+			log.Printf("Purge expired API archives after crawl_id=%s: %v", crawlID, err)
+		}
+	}()
+	job, err := m.Store.ReserveArchive(ctx, principal, projectID, crawlID)
+	if err != nil {
+		log.Printf("Reserve API archive snapshot crawl_id=%s: %v", crawlID, err)
+		return
+	}
+	if job.State != api.ExportPending {
+		return
+	}
+	if !completion.ArchiveReady {
+		m.failArchive(ctx, principal, projectID, crawlID, "archive_not_available")
+		return
+	}
+	if _, loaded := m.inflight.LoadOrStore(job.ID, struct{}{}); loaded {
+		return
+	}
+	defer m.inflight.Delete(job.ID)
+	m.finalizeArchive(ctx, principal, projectID, crawlID, project, completion.State)
+}
+
+func (m *APIExportManager) PurgeExpiredArchives(ctx context.Context, before time.Time) error {
+	store, ok := m.Store.(APIExportCleanupStore)
+	if !ok {
+		return nil
+	}
+	jobs, err := store.ListExpiredArchives(ctx, before)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if job.ArtifactPath != "" {
+			if err := os.Remove(job.ArtifactPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		if cleaner, ok := m.Archives.(APIArchiveCleaner); ok {
+			if err := cleaner.DeleteAPIArchive(job.CrawlID); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		if err := store.DeleteExpiredArchive(ctx, job.ID, before); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *APIExportManager) PrepareExport(ctx context.Context, principal api.Principal, projectID, crawlID string, kind api.ExportKind) (api.PreparedExport, error) {
-	if m == nil || m.Store == nil || m.Exporter == nil || m.Reports == nil {
+	if m == nil || m.Store == nil || m.Findings == nil || m.Exporter == nil {
 		return api.PreparedExport{}, errors.New("export service unavailable")
 	}
 	source, err := m.Store.ResolveSource(ctx, principal, projectID, crawlID)
 	if err != nil {
 		return api.PreparedExport{}, err
 	}
-	crawl := &models.Crawl{Id: source.UpstreamCrawlID, ProjectId: source.UpstreamProjectID}
 	host := exportHost(source.ProjectURL)
 	switch kind {
 	case api.ExportIssuesCSV:
-		return api.PreparedExport{Filename: host + "-issues.csv", ContentType: "text/csv; charset=utf-8", WriteTo: func(w io.Writer) error {
-			m.Exporter.ExportAllIssues("en", w, crawl)
-			return nil
-		}}, nil
+		first, err := m.Findings.ListIssues(ctx, principal, projectID, crawlID, api.PageRequest{Limit: 500})
+		return preparedStream(host+"-issues.csv", "text/csv; charset=utf-8", err, func(w io.Writer) error { return m.streamIssuesCSV(ctx, w, principal, projectID, crawlID, first) })
 	case api.ExportPagesCSV:
-		return api.PreparedExport{Filename: host + "-pages.csv", ContentType: "text/csv; charset=utf-8", WriteTo: func(w io.Writer) error {
-			m.Exporter.ExportPageReports(w, m.Reports.FindAllPageReportsByCrawlId(source.UpstreamCrawlID))
-			return nil
-		}}, nil
+		first, err := m.Findings.ListPages(ctx, principal, projectID, crawlID, api.PageRequest{Limit: 500})
+		return preparedStream(host+"-pages.csv", "text/csv; charset=utf-8", err, func(w io.Writer) error { return m.streamPagesCSV(ctx, w, principal, projectID, crawlID, first) })
 	case api.ExportResourcesCSV:
-		return api.PreparedExport{Filename: host + "-resources.csv", ContentType: "text/csv; charset=utf-8", WriteTo: func(w io.Writer) error {
-			m.Exporter.ExportAllResources(w, crawl)
-			return nil
-		}}, nil
+		first, err := m.Findings.ListResources(ctx, principal, projectID, crawlID, "", api.PageRequest{Limit: 500})
+		return preparedStream(host+"-resources.csv", "text/csv; charset=utf-8", err, func(w io.Writer) error { return m.streamResourcesCSV(ctx, w, principal, projectID, crawlID, first) })
 	case api.ExportSitemapXML:
-		return api.PreparedExport{Filename: "sitemap.xml", ContentType: "application/xml", WriteTo: func(w io.Writer) error {
-			document := sitemap.NewSitemap(w, true)
-			for page := range m.Reports.FindSitemapPageReports(source.UpstreamCrawlID) {
-				document.Add(page.URL, "")
-			}
-			document.Write()
-			return nil
-		}}, nil
+		first, err := m.Findings.ListPages(ctx, principal, projectID, crawlID, api.PageRequest{Limit: 500})
+		return preparedStream("sitemap.xml", "application/xml", err, func(w io.Writer) error { return m.streamSitemapXML(ctx, w, principal, projectID, crawlID, first) })
 	default:
 		return api.PreparedExport{}, errors.New("unsupported export kind")
 	}
 }
 
+func preparedStream(filename, contentType string, err error, write func(io.Writer) error) (api.PreparedExport, error) {
+	if err != nil {
+		return api.PreparedExport{}, err
+	}
+	return api.PreparedExport{Filename: filename, ContentType: contentType, WriteTo: write}, nil
+}
+
+func (m *APIExportManager) streamIssuesCSV(ctx context.Context, output io.Writer, principal api.Principal, projectID, crawlID string, result api.PageResult[api.IssueFinding]) error {
+	writer := csv.NewWriter(output)
+	_ = writer.Write(m.Exporter.issueCSVHeader())
+	for {
+		for _, item := range result.Items {
+			priority := Warning
+			if item.Severity == "critical" {
+				priority = Critical
+			} else if item.Severity == "alert" {
+				priority = Alert
+			}
+			_ = writer.Write(m.Exporter.issueCSVRow("en", &models.ExportIssue{Url: item.PageURL, Type: item.Code, Priority: priority}))
+		}
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			return err
+		}
+		if result.NextAfterID == 0 {
+			return nil
+		}
+		var err error
+		result, err = m.Findings.ListIssues(ctx, principal, projectID, crawlID, api.PageRequest{AfterID: result.NextAfterID, Limit: 500})
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (m *APIExportManager) streamPagesCSV(ctx context.Context, output io.Writer, principal api.Principal, projectID, crawlID string, result api.PageResult[api.PageFinding]) error {
+	writer := csv.NewWriter(output)
+	_ = writer.Write(m.Exporter.pageReportCSVHeader())
+	for {
+		for _, page := range result.Items {
+			report := &models.PageReport{StatusCode: page.StatusCode, URL: page.URL, RedirectURL: page.RedirectURL, ContentType: page.ContentType, Canonical: page.Canonical, Lang: page.Language, Title: page.Title, Description: page.Description, Robots: page.Robots, H1: page.Heading1, H2: page.Heading2, Size: page.SizeBytes, Words: page.Words, Depth: page.Depth, TTFB: page.TTFBMillis}
+			_ = writer.Write(m.Exporter.pageReportCSVRow(report))
+		}
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			return err
+		}
+		if result.NextAfterID == 0 {
+			return nil
+		}
+		var err error
+		result, err = m.Findings.ListPages(ctx, principal, projectID, crawlID, api.PageRequest{AfterID: result.NextAfterID, Limit: 500})
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (m *APIExportManager) streamResourcesCSV(ctx context.Context, output io.Writer, principal api.Principal, projectID, crawlID string, result api.PageResult[api.ResourceFinding]) error {
+	writer := csv.NewWriter(output)
+	_ = writer.Write([]string{"Type", "Origin", "URL", "Alt", "Poster"})
+	for {
+		for _, item := range result.Items {
+			_ = writer.Write([]string{item.Type, item.OriginURL, item.URL, item.Alt, item.Poster})
+		}
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			return err
+		}
+		if result.NextAfterID == 0 {
+			return nil
+		}
+		var err error
+		result, err = m.Findings.ListResources(ctx, principal, projectID, crawlID, "", api.PageRequest{AfterID: result.NextAfterID, Limit: 500})
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (m *APIExportManager) streamSitemapXML(ctx context.Context, output io.Writer, principal api.Principal, projectID, crawlID string, result api.PageResult[api.PageFinding]) error {
+	if _, err := io.WriteString(output, xml.Header); err != nil {
+		return err
+	}
+	encoder := xml.NewEncoder(output)
+	root := xml.StartElement{Name: xml.Name{Local: "urlset"}, Attr: []xml.Attr{{Name: xml.Name{Local: "xmlns"}, Value: "http://www.sitemaps.org/schemas/sitemap/0.9"}}}
+	if err := encoder.EncodeToken(root); err != nil {
+		return err
+	}
+	for {
+		for _, page := range result.Items {
+			if !page.SitemapEligible {
+				continue
+			}
+			if err := encoder.Encode(struct {
+				XMLName xml.Name `xml:"url"`
+				Loc     string   `xml:"loc"`
+			}{Loc: page.URL}); err != nil {
+				return err
+			}
+		}
+		if result.NextAfterID == 0 {
+			break
+		}
+		var err error
+		result, err = m.Findings.ListPages(ctx, principal, projectID, crawlID, api.PageRequest{AfterID: result.NextAfterID, Limit: 500})
+		if err != nil {
+			return err
+		}
+	}
+	if err := encoder.EncodeToken(root.End()); err != nil {
+		return err
+	}
+	return encoder.Flush()
+}
+
 func (m *APIExportManager) PrepareArchive(ctx context.Context, principal api.Principal, projectID, crawlID string) (api.PreparedArchive, error) {
 	if m == nil || m.Store == nil || m.Archives == nil {
 		return api.PreparedArchive{}, errors.New("archive export unavailable")
+	}
+	if err := m.PurgeExpiredArchives(ctx, time.Now().UTC()); err != nil {
+		return api.PreparedArchive{}, err
 	}
 	source, err := m.Store.ResolveSource(ctx, principal, projectID, crawlID)
 	if err != nil {
@@ -106,71 +273,40 @@ func (m *APIExportManager) PrepareArchive(ctx context.Context, principal api.Pri
 	if source.State == api.CrawlQueued || source.State == api.CrawlRunning {
 		return api.PreparedArchive{State: api.ExportPending}, nil
 	}
+	if _, active := m.inflight.Load(job.ID); active {
+		return api.PreparedArchive{State: api.ExportPending}, nil
+	}
 	if _, loaded := m.inflight.LoadOrStore(job.ID, struct{}{}); !loaded {
-		work := func() {
-			defer m.inflight.Delete(job.ID)
-			m.finalizeArchive(context.Background(), principal, projectID, crawlID, source)
-		}
-		if m.RunAsync != nil {
-			m.RunAsync(work)
-		} else {
-			go work()
-		}
+		defer m.inflight.Delete(job.ID)
+		m.finalizeArchive(ctx, principal, projectID, crawlID, models.Project{Id: source.UpstreamProjectID, URL: source.ProjectURL}, source.State)
 	}
 	return api.PreparedArchive{State: api.ExportPending}, nil
 }
 
-func (m *APIExportManager) finalizeArchive(ctx context.Context, principal api.Principal, projectID, crawlID string, source repository.APIExportSource) {
-	project := &models.Project{Id: source.UpstreamProjectID, Host: exportHost(source.ProjectURL), URL: source.ProjectURL}
-	sourcePath, err := m.Archives.GetArchiveFilePath(project)
+func (m *APIExportManager) finalizeArchive(ctx context.Context, principal api.Principal, projectID, crawlID string, project models.Project, state api.CrawlState) {
+	project.Host = exportHost(project.URL)
+	sourcePath, err := m.Archives.GetAPIArchiveFilePath(&project, crawlID)
 	if err != nil {
-		if source.State == api.CrawlSucceeded || source.State == api.CrawlFailed || source.State == api.CrawlCanceled {
-			_ = m.Store.FailArchive(ctx, principal, projectID, crawlID, "archive_not_available")
+		if state == api.CrawlSucceeded || state == api.CrawlFailed || state == api.CrawlCanceled {
+			m.failArchive(ctx, principal, projectID, crawlID, "archive_not_available")
 		}
 		return
 	}
-	sourceFile, err := os.Open(sourcePath)
+	info, err := os.Stat(sourcePath)
 	if err != nil {
-		_ = m.Store.FailArchive(ctx, principal, projectID, crawlID, "archive_read_failed")
+		m.failArchive(ctx, principal, projectID, crawlID, "archive_read_failed")
 		return
 	}
-	defer sourceFile.Close()
-	dir := m.ArtifactDir
-	if dir == "" {
-		dir = filepath.Join("archive", "api")
+	if err := m.Store.CompleteArchive(ctx, principal, projectID, crawlID, sourcePath, info.Size()); err != nil {
+		m.failArchive(ctx, principal, projectID, crawlID, "archive_state_failed")
+		log.Printf("Complete API archive snapshot crawl_id=%s: %v", crawlID, err)
 	}
-	destinationDir := filepath.Join(dir, crawlID)
-	if err := os.MkdirAll(destinationDir, 0o750); err != nil {
-		_ = m.Store.FailArchive(ctx, principal, projectID, crawlID, "archive_copy_failed")
-		return
+}
+
+func (m *APIExportManager) failArchive(ctx context.Context, principal api.Principal, projectID, crawlID, code string) {
+	if err := m.Store.FailArchive(ctx, principal, projectID, crawlID, code); err != nil {
+		log.Printf("Fail API archive snapshot crawl_id=%s code=%s: %v", crawlID, code, err)
 	}
-	destination := filepath.Join(destinationDir, project.Host+".wacz")
-	temporary, err := os.CreateTemp(destinationDir, "archive-*.tmp")
-	if err != nil {
-		_ = m.Store.FailArchive(ctx, principal, projectID, crawlID, "archive_copy_failed")
-		return
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if _, err := io.Copy(temporary, sourceFile); err != nil {
-		temporary.Close()
-		_ = m.Store.FailArchive(ctx, principal, projectID, crawlID, "archive_copy_failed")
-		return
-	}
-	if err := temporary.Close(); err != nil {
-		_ = m.Store.FailArchive(ctx, principal, projectID, crawlID, "archive_copy_failed")
-		return
-	}
-	if err := os.Rename(temporaryPath, destination); err != nil {
-		_ = m.Store.FailArchive(ctx, principal, projectID, crawlID, "archive_copy_failed")
-		return
-	}
-	info, err := os.Stat(destination)
-	if err != nil {
-		_ = m.Store.FailArchive(ctx, principal, projectID, crawlID, "archive_copy_failed")
-		return
-	}
-	_ = m.Store.CompleteArchive(ctx, principal, projectID, crawlID, destination, info.Size())
 }
 
 func exportHost(rawURL string) string {

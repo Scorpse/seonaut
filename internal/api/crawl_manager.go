@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ type CrawlCompletion struct {
 	FailureMessage string
 	TotalURLs      int
 	TotalIssues    int
+	ArchiveReady   bool
 }
 
 type CrawlStore interface {
@@ -33,15 +35,20 @@ type CrawlProjectLookup interface {
 }
 
 type CrawlRunner interface {
-	StartCrawlerObserved(models.Project, models.BasicAuth, func(*models.Crawl, bool, error)) (*models.Crawl, error)
+	StartCrawlerObserved(models.Project, models.BasicAuth, string, func(*models.Crawl, bool, bool, error)) (*models.Crawl, error)
 	StopCrawler(models.Project)
 }
 
+type CrawlCompletionObserver interface {
+	CrawlCompleted(context.Context, Principal, string, string, models.Project, CrawlCompletion)
+}
+
 type CrawlManager struct {
-	Store    CrawlStore
-	Projects CrawlProjectLookup
-	Runner   CrawlRunner
-	Now      func() time.Time
+	Store              CrawlStore
+	Projects           CrawlProjectLookup
+	Runner             CrawlRunner
+	CompletionObserver CrawlCompletionObserver
+	Now                func() time.Time
 }
 
 func (m CrawlManager) StartCrawl(ctx context.Context, principal Principal, projectID, idempotencyKey string) (APICrawl, bool, error) {
@@ -62,27 +69,44 @@ func (m CrawlManager) StartCrawl(ctx context.Context, principal Principal, proje
 		return crawl, replayed, err
 	}
 
-	completion := func(upstream *models.Crawl, canceled bool, runErr error) {
-		result := CrawlCompletion{State: CrawlSucceeded, FinishedAt: m.now()}
+	startedAt := m.now()
+	completion := func(upstream *models.Crawl, canceled, archiveReady bool, runErr error) {
+		result := CrawlCompletion{State: CrawlSucceeded, FinishedAt: m.now(), ArchiveReady: archiveReady}
+		bindingFailed := false
 		if upstream != nil {
 			result.TotalURLs = upstream.TotalURLs
 			result.TotalIssues = upstream.TotalIssues
+			if err := m.Store.MarkCrawlRunning(context.Background(), principal, crawl.ID, upstream.Id, startedAt); err != nil {
+				result.State = CrawlFailed
+				result.FailureCode = "state_persist_failed"
+				result.FailureMessage = "Crawl state could not be persisted"
+				bindingFailed = true
+				archiveReady = false
+				result.ArchiveReady = false
+			}
 		}
-		if canceled {
+		if !bindingFailed && canceled {
 			result.State = CrawlCanceled
-		} else if runErr != nil {
+		} else if !bindingFailed && runErr != nil {
 			result.State = CrawlFailed
 			result.FailureCode = "crawl_failed"
 			result.FailureMessage = "Crawler execution failed"
 		}
-		_ = m.Store.CompleteCrawl(context.Background(), principal.TenantID, crawl.ID, result)
+		completionCtx := context.Background()
+		if m.CompletionObserver != nil {
+			m.CompletionObserver.CrawlCompleted(completionCtx, principal, projectID, crawl.ID, project, result)
+		}
+		if err := m.Store.CompleteCrawl(completionCtx, principal.TenantID, crawl.ID, result); err != nil {
+			if retryErr := m.Store.CompleteCrawl(completionCtx, principal.TenantID, crawl.ID, result); retryErr != nil {
+				log.Printf("Persist terminal API crawl crawl_id=%s: %v (retry: %v)", crawl.ID, err, retryErr)
+			}
+		}
 	}
-	upstream, err := m.Runner.StartCrawlerObserved(project, models.BasicAuth{}, completion)
+	upstream, err := m.Runner.StartCrawlerObserved(project, models.BasicAuth{}, crawl.ID, completion)
 	if err != nil {
 		_ = m.Store.CompleteCrawl(context.Background(), principal.TenantID, crawl.ID, CrawlCompletion{State: CrawlFailed, FinishedAt: m.now(), FailureCode: "start_failed", FailureMessage: "Crawler could not be started"})
 		return APICrawl{}, false, err
 	}
-	startedAt := m.now()
 	if err := m.Store.MarkCrawlRunning(ctx, principal, crawl.ID, upstream.Id, startedAt); err != nil {
 		m.Runner.StopCrawler(project)
 		_ = m.Store.CompleteCrawl(context.Background(), principal.TenantID, crawl.ID, CrawlCompletion{State: CrawlFailed, FinishedAt: m.now(), FailureCode: "state_persist_failed", FailureMessage: "Crawl state could not be persisted"})

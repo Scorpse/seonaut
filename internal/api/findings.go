@@ -38,25 +38,26 @@ type IssueFinding struct {
 }
 
 type PageFinding struct {
-	URL         string `json:"url"`
-	RedirectURL string `json:"redirect_url,omitempty"`
-	StatusCode  int    `json:"status_code"`
-	ContentType string `json:"content_type,omitempty"`
-	Language    string `json:"language,omitempty"`
-	Title       string `json:"title,omitempty"`
-	Description string `json:"description,omitempty"`
-	Robots      string `json:"robots,omitempty"`
-	Canonical   string `json:"canonical,omitempty"`
-	Heading1    string `json:"heading_1,omitempty"`
-	Heading2    string `json:"heading_2,omitempty"`
-	Words       int    `json:"words"`
-	SizeBytes   int64  `json:"size_bytes"`
-	Depth       int    `json:"depth"`
-	TTFBMillis  int    `json:"ttfb_ms"`
-	Crawled     bool   `json:"crawled"`
-	InSitemap   bool   `json:"in_sitemap"`
-	NoIndex     bool   `json:"noindex"`
-	NoFollow    bool   `json:"nofollow"`
+	URL             string `json:"url"`
+	RedirectURL     string `json:"redirect_url,omitempty"`
+	StatusCode      int    `json:"status_code"`
+	ContentType     string `json:"content_type,omitempty"`
+	Language        string `json:"language,omitempty"`
+	Title           string `json:"title,omitempty"`
+	Description     string `json:"description,omitempty"`
+	Robots          string `json:"robots,omitempty"`
+	Canonical       string `json:"canonical,omitempty"`
+	Heading1        string `json:"heading_1,omitempty"`
+	Heading2        string `json:"heading_2,omitempty"`
+	Words           int    `json:"words"`
+	SizeBytes       int64  `json:"size_bytes"`
+	Depth           int    `json:"depth"`
+	TTFBMillis      int    `json:"ttfb_ms"`
+	Crawled         bool   `json:"crawled"`
+	InSitemap       bool   `json:"in_sitemap"`
+	NoIndex         bool   `json:"noindex"`
+	NoFollow        bool   `json:"nofollow"`
+	SitemapEligible bool   `json:"-"`
 }
 
 type LinkFinding struct {

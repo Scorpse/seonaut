@@ -98,6 +98,12 @@ func TestAPIFindingsMySQLControlledFixtureMatchesUpstreamExports(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE pagereports SET redirect_url = '', refresh = '', lang = COALESCE(lang, ''), title = COALESCE(title, ''), description = '', robots = '', canonical = '', h1 = '', h2 = '', words = COALESCE(words, 0), size = COALESCE(size, 0) WHERE crawl_id = ?`, upstreamCrawlID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE pagereports SET robots = 'index,nofollow' WHERE id = ?`, pageOneID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pagereports (crawl_id, url, status_code, url_hash, body_hash, crawled) VALUES (?, 'https://fixture.example/legacy', 200, 'fixture-legacy', 'fixture-body-legacy', 1)`, upstreamCrawlID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO issues (pagereport_id, crawl_id, issue_type_id) VALUES (?, ?, 6)`, pageOneID, upstreamCrawlID); err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +125,7 @@ func TestAPIFindingsMySQLControlledFixtureMatchesUpstreamExports(t *testing.T) {
 	if err := crawlRepository.CompleteCrawl(ctx, tenantID, crawl.ID, api.CrawlCompletion{State: api.CrawlSucceeded, FinishedAt: now, TotalURLs: 2, TotalIssues: 1}); err != nil {
 		t.Fatal(err)
 	}
+	(&repository.CrawlRepository{DB: db}).DeleteCrawlDataIfUnreferenced(&models.Crawl{Id: upstreamCrawlID})
 
 	findings := repository.APIFindingRepository{DB: db}
 	issues, err := findings.ListIssues(ctx, principal, project.ID, crawl.ID, api.PageRequest{Limit: 100})
@@ -126,7 +133,7 @@ func TestAPIFindingsMySQLControlledFixtureMatchesUpstreamExports(t *testing.T) {
 		t.Fatalf("issues=%+v err=%v", issues, err)
 	}
 	pages, err := findings.ListPages(ctx, principal, project.ID, crawl.ID, api.PageRequest{Limit: 100})
-	if err != nil || len(pages.Items) != 2 || pages.Items[0].StatusCode != 200 || pages.Items[1].StatusCode != 404 {
+	if err != nil || len(pages.Items) != 3 || pages.Items[0].StatusCode != 200 || !pages.Items[0].NoFollow || !pages.Items[0].SitemapEligible || pages.Items[1].StatusCode != 404 || pages.Items[1].SitemapEligible || pages.Items[2].NoFollow || pages.Items[2].SitemapEligible {
 		t.Fatalf("pages=%+v err=%v", pages, err)
 	}
 	links, err := findings.ListLinks(ctx, principal, project.ID, crawl.ID, api.PageRequest{Limit: 100})
@@ -153,8 +160,7 @@ func TestAPIFindingsMySQLControlledFixtureMatchesUpstreamExports(t *testing.T) {
 		t.Fatalf("resource types=%v", resourceTypes)
 	}
 
-	upstreamExporter := services.NewExporter(&repository.ExportRepository{DB: db}, identityExportTranslator{})
-	exportManager := services.APIExportManager{Store: &repository.APIExportRepository{DB: db}, Exporter: upstreamExporter, Reports: &repository.PageReportRepository{DB: db}}
+	exportManager := services.APIExportManager{Store: &repository.APIExportRepository{DB: db}, Findings: findings, Exporter: services.NewExporter(nil, identityExportTranslator{})}
 	for _, check := range []struct {
 		kind   api.ExportKind
 		header []string
@@ -175,6 +181,17 @@ func TestAPIFindingsMySQLControlledFixtureMatchesUpstreamExports(t *testing.T) {
 		if err != nil || len(rows) < 2 || strings.Join(rows[0], "|") != strings.Join(check.header, "|") {
 			t.Fatalf("%s rows=%+v err=%v", check.kind, rows, err)
 		}
+	}
+	sitemapExport, err := exportManager.PrepareExport(ctx, principal, project.ID, crawl.ID, api.ExportSitemapXML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sitemapOutput bytes.Buffer
+	if err := sitemapExport.WriteTo(&sitemapOutput); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sitemapOutput.String(), "https://fixture.example/one") || strings.Contains(sitemapOutput.String(), "https://fixture.example/missing") || strings.Contains(sitemapOutput.String(), "https://fixture.example/legacy") {
+		t.Fatalf("sitemap=%s", sitemapOutput.String())
 	}
 	if pageTwoID <= pageOneID {
 		t.Fatal("fixture page order is not deterministic")

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stjudewashere/seonaut/internal/archiver"
 	"github.com/stjudewashere/seonaut/internal/config"
 	"github.com/stjudewashere/seonaut/internal/crawler"
 	"github.com/stjudewashere/seonaut/internal/models"
@@ -25,7 +26,7 @@ type CrawlerServiceRepository interface {
 	SaveCrawl(models.Project) (*models.Crawl, error)
 	GetLastCrawl(p *models.Project) models.Crawl
 	GetLastCrawls(models.Project, int) []models.Crawl
-	DeleteCrawlData(c *models.Crawl)
+	DeleteCrawlDataIfUnreferenced(c *models.Crawl)
 
 	CountIssuesByPriority(int64, int) int
 	UpdateCrawl(*models.Crawl) error
@@ -70,13 +71,13 @@ func NewCrawlerService(r CrawlerServiceRepository, s CrawlerServicesContainer) *
 // running or if there's an error creating it.
 // Finally the previous crawl's data is removed and the crawl is returned.
 func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) error {
-	_, err := s.StartCrawlerObserved(p, b, nil)
+	_, err := s.StartCrawlerObserved(p, b, "", nil)
 	return err
 }
 
-// StartCrawlerObserved preserves the HTML crawl behavior while exposing the
-// upstream crawl ID and one terminal callback to API callers.
-func (s *CrawlerService) StartCrawlerObserved(p models.Project, b models.BasicAuth, completed func(*models.Crawl, bool, error)) (*models.Crawl, error) {
+// StartCrawlerObserved preserves completed crawl data for API callers while
+// exposing the upstream crawl ID and one terminal callback.
+func (s *CrawlerService) StartCrawlerObserved(p models.Project, b models.BasicAuth, archiveID string, completed func(*models.Crawl, bool, bool, error)) (*models.Crawl, error) {
 	u, err := url.Parse(p.URL)
 	if err != nil {
 		return nil, err
@@ -104,28 +105,52 @@ func (s *CrawlerService) StartCrawlerObserved(p models.Project, b models.BasicAu
 
 	go func() {
 		var runErr error
+		archiveReady := false
+		var closeArchive func() error
 		defer func() {
+			defer s.removeCrawler(&p)
 			if recovered := recover(); recovered != nil {
 				runErr = fmt.Errorf("crawler panic: %v", recovered)
 				log.Printf("Crawler for %s failed: %v", p.URL, runErr)
 			}
+			if closeArchive != nil {
+				if err := closeArchive(); err != nil {
+					log.Printf("Failed to finalize archive for %s: %v", p.URL, err)
+				} else {
+					archiveReady = true
+				}
+			}
 			canceled := s.crawlerCanceled(&p)
-			s.removeCrawler(&p)
 			if completed != nil {
-				completed(crawl, canceled, runErr)
+				completed(crawl, canceled, archiveReady, runErr)
 			}
 		}()
-		defer s.repository.DeleteCrawlData(&previousCrawl)
+		defer s.repository.DeleteCrawlDataIfUnreferenced(&previousCrawl)
 
 		callback := s.crawlerHandler.responseCallback(crawl, &p, c)
 
 		if p.Archive {
-			archiver, err := s.ArchiveService.GetArchiveWriter(&p)
+			var archiveWriter *archiver.Writer
+			var publishArchive func() error
+			var err error
+			if archiveID != "" {
+				archiveWriter, publishArchive, err = s.ArchiveService.GetAPIArchiveWriter(&p, archiveID)
+			} else {
+				archiveWriter, err = s.ArchiveService.GetArchiveWriter(&p)
+			}
 			if err != nil {
 				log.Printf("Failed to create archive: %v", err)
 			} else {
-				defer archiver.Close()
-				callback = s.crawlerHandler.archiveWrapper(callback, archiver)
+				closeArchive = func() error {
+					if err := archiveWriter.Close(); err != nil {
+						return err
+					}
+					if publishArchive != nil {
+						return publishArchive()
+					}
+					return nil
+				}
+				callback = s.crawlerHandler.archiveWrapper(callback, archiveWriter)
 			}
 		}
 

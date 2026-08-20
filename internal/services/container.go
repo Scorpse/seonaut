@@ -239,11 +239,14 @@ func (c *Container) InitExportService() {
 
 func (c *Container) InitAPIExportService() {
 	c.APIExports = &APIExportManager{
-		Store:       c.apiExportRepository,
-		Exporter:    c.ExportService,
-		Reports:     c.pageReportRepository,
-		Archives:    c.ArchiveService,
-		ArtifactDir: "archive/api",
+		Store:    c.apiExportRepository,
+		Findings: c.APIFindings,
+		Exporter: c.ExportService,
+		Archives: c.ArchiveService,
+	}
+	c.APICrawlManager.CompletionObserver = c.APIExports
+	if err := c.APIExports.PurgeExpiredArchives(context.Background(), time.Now().UTC()); err != nil {
+		log.Printf("Purge expired API archives: %v", err)
 	}
 }
 

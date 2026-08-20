@@ -131,6 +131,7 @@
 
 **Interfaces:**
 - Produces: cursor-paginated issue/page/link/resource endpoints plus CSV, sitemap, and asynchronous WACZ exports.
+- Pagination exception: upstream finding rows have no creation timestamp, so finding cursors use their immutable numeric row ID rather than the general `(created_at, id)` convention. The signed cursor still binds the route, project, crawl, and filters.
 
 - [x] Write controlled-fixture tests with literal counts/codes, tampered cursors, max limits, project-bound reads, foreign-resource `404`, and CSV column equivalence with existing exporters.
 - [x] Verify red tests.
