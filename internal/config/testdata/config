@@ -16,4 +16,5 @@ agent = "testing"
 environment = "test"
 root_public_id = "root"
 root_hash = "test-hash"
+cursor_secret = "0123456789abcdef0123456789abcdef"
 rotation_overlap_seconds = 120

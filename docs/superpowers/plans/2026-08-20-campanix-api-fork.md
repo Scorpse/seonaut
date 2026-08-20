@@ -132,11 +132,11 @@
 **Interfaces:**
 - Produces: cursor-paginated issue/page/link/resource endpoints plus CSV, sitemap, and asynchronous WACZ exports.
 
-- [ ] Write controlled-fixture tests with literal counts/codes, tampered cursors, max limits, project-bound reads, foreign-resource `404`, and CSV column equivalence with existing exporters.
-- [ ] Verify red tests.
-- [ ] Implement signed opaque cursors and owner-joined repository queries.
-- [ ] Adapt existing exporter/archive services without duplicating SEO calculations.
-- [ ] Run fixture, race, and full upstream tests; commit `MKT-281 expose scoped findings and exports`.
+- [x] Write controlled-fixture tests with literal counts/codes, tampered cursors, max limits, project-bound reads, foreign-resource `404`, and CSV column equivalence with existing exporters.
+- [x] Verify red tests.
+- [x] Implement signed opaque cursors and owner-joined repository queries.
+- [x] Adapt existing exporter/archive services without duplicating SEO calculations.
+- [x] Run fixture, race, and full upstream tests; commit `MKT-281 expose scoped findings and exports`.
 
 ### Task 7: SSRF controls, quotas, audit, and OpenAPI
 

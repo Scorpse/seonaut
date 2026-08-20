@@ -77,6 +77,9 @@ type Dependencies struct {
 	Tenants      TenantService
 	Projects     ProjectService
 	Crawls       CrawlService
+	Findings     FindingService
+	CursorSecret []byte
+	Exports      ExportService
 }
 
 type server struct {
@@ -113,6 +116,15 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.Handle("GET /api/v1/projects/{project_id}/crawls", requestIDMiddleware(http.HandlerFunc(s.listCrawls)))
 	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}", requestIDMiddleware(http.HandlerFunc(s.getCrawl)))
 	mux.Handle("POST /api/v1/projects/{project_id}/crawls/{crawl_id}/cancel", requestIDMiddleware(http.HandlerFunc(s.cancelCrawl)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/issues", requestIDMiddleware(http.HandlerFunc(s.listIssues)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/pages", requestIDMiddleware(http.HandlerFunc(s.listPages)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/links", requestIDMiddleware(http.HandlerFunc(s.listLinks)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/resources", requestIDMiddleware(http.HandlerFunc(s.listResources)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/issues.csv", requestIDMiddleware(http.HandlerFunc(s.exportIssuesCSV)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/pages.csv", requestIDMiddleware(http.HandlerFunc(s.exportPagesCSV)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/resources.csv", requestIDMiddleware(http.HandlerFunc(s.exportResourcesCSV)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/sitemap.xml", requestIDMiddleware(http.HandlerFunc(s.exportSitemap)))
+	mux.Handle("GET /api/v1/projects/{project_id}/crawls/{crawl_id}/exports/archive.wacz", requestIDMiddleware(http.HandlerFunc(s.exportArchive)))
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +156,7 @@ func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 		"fork_revision":     s.deps.Build.ForkRevision,
 		"upstream_revision": s.deps.Build.UpstreamRevision,
 		"schema_version":    s.deps.Build.SchemaVersion,
-		"capabilities":      []string{"health", "meta"},
+		"capabilities":      []string{"health", "meta", "key_management", "tenant_provisioning", "projects", "crawls", "findings", "exports"},
 		"request_id":        requestIDFrom(r.Context()),
 	})
 }

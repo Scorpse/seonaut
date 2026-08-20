@@ -119,8 +119,14 @@ func TestMetaReturnsBuildProvenanceAndCapabilities(t *testing.T) {
 	if body.ForkVersion != "0.1.0" || body.ForkRevision != "fork-sha" || body.UpstreamRevision != "upstream-sha" || body.SchemaVersion != "76" {
 		t.Fatalf("unexpected provenance: %#v", body)
 	}
-	if len(body.Capabilities) != 2 || body.Capabilities[0] != "health" || body.Capabilities[1] != "meta" {
+	wantCapabilities := []string{"health", "meta", "key_management", "tenant_provisioning", "projects", "crawls", "findings", "exports"}
+	if len(body.Capabilities) != len(wantCapabilities) {
 		t.Fatalf("capabilities = %#v", body.Capabilities)
+	}
+	for i, capability := range wantCapabilities {
+		if body.Capabilities[i] != capability {
+			t.Fatalf("capabilities = %#v", body.Capabilities)
+		}
 	}
 	if body.RequestID == "" || res.Header().Get("X-Request-ID") != body.RequestID {
 		t.Fatalf("request id missing or mismatched: header=%q body=%q", res.Header().Get("X-Request-ID"), body.RequestID)

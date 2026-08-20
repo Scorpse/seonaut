@@ -39,6 +39,7 @@ func TestLoadConfig(t *testing.T) {
 		{config.API.Environment, "test"},
 		{config.API.RootPublicID, "root"},
 		{config.API.RootHash, "test-hash"},
+		{config.API.CursorSecret, "0123456789abcdef0123456789abcdef"},
 	}
 
 	for _, v := range m {

@@ -38,6 +38,7 @@ type APIConfig struct {
 	Environment            string `mapstructure:"environment"`
 	RootPublicID           string `mapstructure:"root_public_id"`
 	RootHash               string `mapstructure:"root_hash"`
+	CursorSecret           string `mapstructure:"cursor_secret"`
 	RotationOverlapSeconds int    `mapstructure:"rotation_overlap_seconds"`
 }
 

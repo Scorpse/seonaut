@@ -214,6 +214,31 @@ func (e *Exporter) ExportVideos(f io.Writer, crawl *models.Crawl) {
 	w.Flush()
 }
 
+// ExportAllResources exports crawl media and embedded assets under one stable API CSV contract.
+func (e *Exporter) ExportAllResources(f io.Writer, crawl *models.Crawl) {
+	w := csv.NewWriter(f)
+	_ = w.Write([]string{"Type", "Origin", "URL", "Alt", "Poster"})
+	for v := range e.repository.ExportImages(crawl) {
+		_ = w.Write([]string{"image", v.Origin, v.Image, v.Alt, ""})
+	}
+	for v := range e.repository.ExportScripts(crawl) {
+		_ = w.Write([]string{"script", v.Origin, v.Script, "", ""})
+	}
+	for v := range e.repository.ExportStyles(crawl) {
+		_ = w.Write([]string{"style", v.Origin, v.Style, "", ""})
+	}
+	for v := range e.repository.ExportIframes(crawl) {
+		_ = w.Write([]string{"iframe", v.Origin, v.Iframe, "", ""})
+	}
+	for v := range e.repository.ExportAudios(crawl) {
+		_ = w.Write([]string{"audio", v.Origin, v.Audio, "", ""})
+	}
+	for v := range e.repository.ExportVideos(crawl) {
+		_ = w.Write([]string{"video", v.Origin, v.Video, "", v.Poster})
+	}
+	w.Flush()
+}
+
 // Export all hreflangs as a CSV file
 func (e *Exporter) ExportHreflangs(f io.Writer, crawl *models.Crawl) {
 	w := csv.NewWriter(f)

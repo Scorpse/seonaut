@@ -21,4 +21,5 @@ theme = "dark"
 environment = "dev"
 root_public_id = "root"
 root_hash = ""
+cursor_secret = ""
 rotation_overlap_seconds = 300

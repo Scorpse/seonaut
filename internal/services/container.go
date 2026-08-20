@@ -43,6 +43,8 @@ type Container struct {
 	APITenantManager   api.TenantManager
 	APIProjectManager  api.ProjectManager
 	APICrawlManager    api.CrawlManager
+	APIFindings        api.FindingService
+	APIExports         *APIExportManager
 
 	db                   *sql.DB
 	issueRepository      *repository.IssueRepository
@@ -56,6 +58,8 @@ type Container struct {
 	apiTenantRepository  *repository.APITenantRepository
 	apiProjectRepository *repository.APIProjectRepository
 	apiCrawlRepository   *repository.APICrawlRepository
+	apiFindingRepository *repository.APIFindingRepository
+	apiExportRepository  *repository.APIExportRepository
 }
 
 func (c *Container) Ready(ctx context.Context) error {
@@ -82,6 +86,7 @@ func NewContainer(configFile string) *Container {
 	c.InitProjectService()
 	c.InitProjectViewService()
 	c.InitExportService()
+	c.InitAPIExportService()
 	c.InitCrawlerService()
 	c.InitRenderer()
 	c.InitCookieSession()
@@ -135,6 +140,8 @@ func (c *Container) InitRepositories() {
 	c.apiTenantRepository = &repository.APITenantRepository{DB: c.db}
 	c.apiProjectRepository = &repository.APIProjectRepository{DB: c.db}
 	c.apiCrawlRepository = &repository.APICrawlRepository{DB: c.db}
+	c.apiFindingRepository = &repository.APIFindingRepository{DB: c.db}
+	c.apiExportRepository = &repository.APIExportRepository{DB: c.db}
 
 	if _, err := c.apiCrawlRepository.RecoverInterruptedCrawls(context.Background(), time.Now().UTC()); err != nil {
 		log.Printf("Recover interrupted API crawls: %v", err)
@@ -149,6 +156,7 @@ func (c *Container) InitAPIServices() {
 	c.APITenantManager = api.TenantManager{Store: c.apiTenantRepository, Keys: c.APIKeyManager}
 	c.APIProjectManager = api.ProjectManager{Store: c.apiProjectRepository}
 	c.APICrawlManager = api.CrawlManager{Store: c.apiCrawlRepository, Projects: c.apiProjectRepository}
+	c.APIFindings = c.apiFindingRepository
 }
 
 // Create the PubSub broker.
@@ -227,6 +235,16 @@ func (c *Container) InitProjectViewService() {
 // Create the Export service.
 func (c *Container) InitExportService() {
 	c.ExportService = NewExporter(c.exportRepository, c.Translator)
+}
+
+func (c *Container) InitAPIExportService() {
+	c.APIExports = &APIExportManager{
+		Store:       c.apiExportRepository,
+		Exporter:    c.ExportService,
+		Reports:     c.pageReportRepository,
+		Archives:    c.ArchiveService,
+		ArtifactDir: "archive/api",
+	}
 }
 
 // Create Crawler service.

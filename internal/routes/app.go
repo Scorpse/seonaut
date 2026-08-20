@@ -31,6 +31,9 @@ func NewServer(container *services.Container) {
 		Tenants:      container.APITenantManager,
 		Projects:     container.APIProjectManager,
 		Crawls:       container.APICrawlManager,
+		Findings:     container.APIFindings,
+		CursorSecret: []byte(container.Config.API.CursorSecret),
+		Exports:      container.APIExports,
 	})
 
 	// Handle static files
