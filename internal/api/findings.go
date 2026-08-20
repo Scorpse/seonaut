@@ -78,6 +78,7 @@ type ResourceFinding struct {
 }
 
 type FindingService interface {
+	AuthorizeCrawl(context.Context, Principal, string, string) error
 	ListIssues(context.Context, Principal, string, string, PageRequest) (PageResult[IssueFinding], error)
 	ListPages(context.Context, Principal, string, string, PageRequest) (PageResult[PageFinding], error)
 	ListLinks(context.Context, Principal, string, string, PageRequest) (PageResult[LinkFinding], error)
@@ -179,6 +180,10 @@ func (s *server) serveFindingPage(w http.ResponseWriter, r *http.Request, route,
 	projectID, crawlID := r.PathValue("project_id"), r.PathValue("crawl_id")
 	if principal.ProjectID != "" && principal.ProjectID != projectID {
 		writeCrawlError(w, r, ErrCrawlNotFound)
+		return
+	}
+	if err := s.deps.Findings.AuthorizeCrawl(r.Context(), principal, projectID, crawlID); err != nil {
+		writeCrawlError(w, r, err)
 		return
 	}
 	page, err := parsePageRequest(r, s.deps.CursorSecret, cursorPayload{Route: route, ProjectID: projectID, CrawlID: crawlID, Filter: filter})

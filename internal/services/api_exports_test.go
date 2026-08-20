@@ -62,6 +62,10 @@ func (s *apiExportStoreFixture) FailArchive(_ context.Context, _ api.Principal, 
 
 type exportFindingsFixture struct{}
 
+func (exportFindingsFixture) AuthorizeCrawl(context.Context, api.Principal, string, string) error {
+	return nil
+}
+
 func (exportFindingsFixture) ListIssues(context.Context, api.Principal, string, string, api.PageRequest) (api.PageResult[api.IssueFinding], error) {
 	return api.PageResult[api.IssueFinding]{Items: []api.IssueFinding{{Code: "ERROR_EMPTY_TITLE", Severity: "alert", PageURL: "https://a.example/one"}}}, nil
 }

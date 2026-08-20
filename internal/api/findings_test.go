@@ -14,6 +14,13 @@ type memoryFindings struct {
 	after int64
 }
 
+func (m *memoryFindings) AuthorizeCrawl(_ context.Context, principal Principal, projectID, crawlID string) error {
+	if principal.TenantID != "tenant-a" || projectID != "project-a" || crawlID != "crawl-a" || principal.ProjectID != "" && principal.ProjectID != projectID {
+		return ErrCrawlNotFound
+	}
+	return nil
+}
+
 func (m *memoryFindings) ListIssues(_ context.Context, principal Principal, projectID, crawlID string, page PageRequest) (PageResult[IssueFinding], error) {
 	if principal.TenantID != "tenant-a" || projectID != "project-a" || crawlID != "crawl-a" || principal.ProjectID != "" && principal.ProjectID != projectID {
 		return PageResult[IssueFinding]{}, ErrCrawlNotFound
@@ -101,6 +108,7 @@ func TestFindingRoutesExposeEachResultKindAndHideForeignCrawls(t *testing.T) {
 		{path: "/api/v1/projects/project-a/crawls/crawl-a/resources?type=image", token: "tenant-a", status: http.StatusOK, contains: `"type":"image"`},
 		{path: "/api/v1/projects/project-a/crawls/crawl-a/resources", token: "tenant-a", status: http.StatusOK, contains: `"type":"image"`},
 		{path: "/api/v1/projects/project-b/crawls/crawl-b/issues", token: "tenant-a", status: http.StatusNotFound, contains: "crawl_not_found"},
+		{path: "/api/v1/projects/project-b/crawls/crawl-b/pages?cursor=invalid", token: "tenant-a", status: http.StatusNotFound, contains: "crawl_not_found"},
 		{path: "/api/v1/projects/project-a/crawls/crawl-a/issues", token: "platform", status: http.StatusForbidden, contains: "scope_forbidden"},
 		{path: "/api/v1/projects/project-a/crawls/crawl-a/resources?type=font", token: "tenant-a", status: http.StatusBadRequest, contains: "resource_type_invalid"},
 	}

@@ -44,6 +44,7 @@ Useful switches:
 pwsh ./scripts/api-smoke.ps1 -SkipRollback
 pwsh ./scripts/api-smoke.ps1 -KeepStack
 pwsh ./scripts/api-smoke.ps1 -SkipBuild -KeepStack
+pwsh ./scripts/api-smoke.ps1 -SkipBuild -ReuseStack
 ```
 
 `-AllowDirty` exists only for developing the harness. Release evidence must come from a clean commit so the image label identifies its exact contents.

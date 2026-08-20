@@ -170,11 +170,11 @@
 **Interfaces:**
 - Produces: repeatable two-tenant isolation smoke, controlled crawl accuracy check, labeled fork image, and pinned upstream rollback service.
 
-- [ ] Build the image with explicit fork/upstream revisions and verify `/meta` plus OCI labels agree.
-- [ ] Run the fixture crawl and compare JSON issue URLs/codes and CSV/page/link/resource counts with upstream UI repositories.
-- [ ] Run two-tenant negative probes across lists, IDs, cursors, exports, and timing-equivalent `404` responses.
-- [ ] Snapshot MySQL, start the upstream image pinned by digest, and verify existing projects/completed crawls remain readable.
-- [ ] Run `go test -race ./...`, `go vet ./...`, Docker smoke, and commit `MKT-281 verify isolation provenance and rollback`.
+- [x] Build the image with explicit fork/upstream revisions and verify `/meta` plus OCI labels agree.
+- [x] Run the fixture crawl and compare JSON issue URLs/codes and CSV/page/link/resource counts with upstream UI repositories.
+- [x] Run two-tenant negative probes across lists, IDs, cursors, exports, and timing-equivalent `404` responses.
+- [x] Snapshot MySQL, start the upstream image pinned by digest, and verify existing projects/completed crawls remain readable.
+- [x] Run `go test -race ./...`, `go vet ./...`, Docker smoke, and commit `MKT-281 verify isolation provenance and rollback`.
 
 ## Self-review
 

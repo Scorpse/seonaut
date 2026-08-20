@@ -13,8 +13,9 @@ services:
       interval: 2s
       timeout: 3s
       retries: 60
-    volumes:
-      - database:/var/lib/mysql
+      start_period: 600s
+    tmpfs:
+      - /var/lib/mysql:size=1g
     networks: [smoke]
 
   fixture:
@@ -76,8 +77,8 @@ services:
       - "${SEONAUT_ROLLBACK_PORT:-19001}:9000"
     networks: [smoke]
 
-volumes:
-  database:
-
 networks:
   smoke:
+    ipam:
+      config:
+        - subnet: 10.244.81.0/24

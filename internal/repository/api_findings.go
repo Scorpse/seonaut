@@ -25,6 +25,11 @@ type APIFindingRepository struct {
 	DB *sql.DB
 }
 
+func (r APIFindingRepository) AuthorizeCrawl(ctx context.Context, principal api.Principal, projectID, crawlID string) error {
+	_, err := r.authorizeCrawl(ctx, principal, projectID, crawlID)
+	return err
+}
+
 func (r APIFindingRepository) ListIssues(ctx context.Context, principal api.Principal, projectID, crawlID string, page api.PageRequest) (api.PageResult[api.IssueFinding], error) {
 	if !r.validPrincipal(principal, projectID) {
 		return api.PageResult[api.IssueFinding]{}, api.ErrCrawlNotFound

@@ -6,6 +6,7 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipRollback,
     [switch]$KeepStack,
+    [switch]$ReuseStack,
     [switch]$AllowDirty
 )
 
@@ -34,10 +35,14 @@ function Invoke-SmokeRequest {
         [Parameter(Mandatory)][string]$Path,
         [string]$Token,
         [object]$Body,
+        [hashtable]$ExtraHeaders,
         [string]$Origin = $BaseUrl
     )
     $headers = @{}
     if ($Token) { $headers.Authorization = "Bearer $Token" }
+    if ($ExtraHeaders) {
+        foreach ($name in $ExtraHeaders.Keys) { $headers[$name] = $ExtraHeaders[$name] }
+    }
     $parameters = @{
         Method = $Method
         Uri = "$Origin$Path"
@@ -73,7 +78,7 @@ function Assert-Status {
 
 function Get-DatabaseScalar {
     param([Parameter(Mandatory)][string]$Sql)
-    $output = Invoke-Docker ($compose + @("exec", "-T", "db", "mysql", "-N", "-B", "-useonaut", "-pseonaut-smoke", "seonaut", "-e", $Sql))
+    $output = Invoke-Docker ($compose + @("exec", "-T", "-e", "MYSQL_PWD=seonaut-smoke", "db", "mysql", "-N", "-B", "-useonaut", "seonaut", "-e", $Sql))
     return [string]($output | Select-Object -Last 1)
 }
 
@@ -100,11 +105,13 @@ try {
     $env:SEONAUT_FORK_VERSION = "mkt-281-smoke"
     $image = "kilnbench/seonaut-campanix:$forkRevision"
 
-    Invoke-Docker ($compose + @("down", "--volumes", "--remove-orphans")) | Out-Null
-    $up = @("up", "-d")
-    if (-not $SkipBuild) { $up += "--build" }
-    $up += @("db", "fixture", "app")
-    Invoke-Docker ($compose + $up) | Out-Null
+    if (-not $ReuseStack) {
+        Invoke-Docker ($compose + @("down", "--volumes", "--remove-orphans")) | Out-Null
+        $up = @("up", "-d")
+        if (-not $SkipBuild) { $up += "--build" }
+        $up += @("db", "fixture", "app")
+        Invoke-Docker ($compose + $up) | Out-Null
+    }
     Wait-ForUrl "$BaseUrl/api/v1/health"
 
     $platform = Invoke-SmokeRequest "POST" "/api/v1/root/platform-keys" $rootKey @{
@@ -127,14 +134,14 @@ try {
     $tenantBKey = [string]$tenantBResponse.Json.data.key
 
     $projectBody = @{ url = "http://fixture/"; crawl_sitemap = $true; check_external_links = $false; archive = $true; user_agent = "Kilnbench-SEOnaut-Smoke/1.0" }
-    $projectAResponse = Invoke-SmokeRequest "PUT" "/api/v1/projects/fixture-a" $tenantAKey $projectBody
-    $projectBResponse = Invoke-SmokeRequest "PUT" "/api/v1/projects/fixture-b" $tenantBKey $projectBody
+    $projectAResponse = Invoke-SmokeRequest "PUT" "/api/v1/projects/fixture-a" $tenantAKey $projectBody @{ "Idempotency-Key" = "fixture-project-a" }
+    $projectBResponse = Invoke-SmokeRequest "PUT" "/api/v1/projects/fixture-b" $tenantBKey $projectBody @{ "Idempotency-Key" = "fixture-project-b" }
     Assert-Status $projectAResponse @(201) "tenant-a project creation"
     Assert-Status $projectBResponse @(201) "tenant-b project creation"
     $projectA = [string]$projectAResponse.Json.data.id
     $projectB = [string]$projectBResponse.Json.data.id
 
-    $crawlResponse = Invoke-SmokeRequest "POST" "/api/v1/projects/$projectA/crawls" $tenantAKey $null
+    $crawlResponse = Invoke-SmokeRequest "POST" "/api/v1/projects/$projectA/crawls" $tenantAKey $null @{ "Idempotency-Key" = "fixture-crawl-a" }
     Assert-Status $crawlResponse @(202) "fixture crawl start"
     $crawlA = [string]$crawlResponse.Json.data.id
     $crawl = $null
@@ -151,7 +158,7 @@ try {
 
     $results = @{}
     foreach ($kind in @("issues", "pages", "links", "resources")) {
-        $response = Invoke-SmokeRequest "GET" "/api/v1/projects/$projectA/crawls/$crawlA/$kind?limit=500" $tenantAKey $null
+        $response = Invoke-SmokeRequest "GET" "/api/v1/projects/$projectA/crawls/$crawlA/${kind}?limit=500" $tenantAKey $null
         Assert-Status $response @(200) "$kind findings"
         $results[$kind] = @($response.Json.data)
     }
@@ -212,7 +219,7 @@ try {
         $projectCountBefore = [int](Get-DatabaseScalar "SELECT COUNT(*) FROM projects;")
         $crawlCountBefore = [int](Get-DatabaseScalar "SELECT COUNT(*) FROM crawls WHERE end IS NOT NULL;")
         if ($projectCountBefore -lt 2 -or $crawlCountBefore -lt 1) { throw "Rollback fixture has no durable project/crawl data" }
-        Invoke-Docker ($compose + @("exec", "-T", "db", "sh", "-c", "mysqldump -uroot -proot-smoke --single-transaction seonaut > /tmp/pre-rollback.sql")) | Out-Null
+        Invoke-Docker ($compose + @("exec", "-T", "-e", "MYSQL_PWD=root-smoke", "db", "sh", "-c", "mysqldump -uroot --single-transaction seonaut > /tmp/pre-rollback.sql")) | Out-Null
         Invoke-Docker ($compose + @("stop", "app")) | Out-Null
         Invoke-Docker ($compose + @("--profile", "rollback", "up", "-d", "rollback")) | Out-Null
         Wait-ForUrl "$RollbackUrl/signin"
