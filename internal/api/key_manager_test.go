@@ -8,7 +8,12 @@ import (
 )
 
 type managerMemoryStore struct {
-	keys map[string]StoredKey
+	keys           map[string]StoredKey
+	projectTenants map[string]string
+}
+
+func (s *managerMemoryStore) ProjectBelongsToTenant(_ context.Context, tenantID, projectID string) (bool, error) {
+	return s.projectTenants[projectID] == tenantID, nil
 }
 
 func (s *managerMemoryStore) FindAPIKey(_ context.Context, publicID string) (StoredKey, error) {
@@ -126,5 +131,15 @@ func TestReadOnlyKeyRejectsEveryMutationScope(t *testing.T) {
 		if !errors.Is(err, ErrInvalidKeyRequest) {
 			t.Fatalf("read-only scope %q error=%v, want ErrInvalidKeyRequest", scope, err)
 		}
+	}
+}
+
+func TestProjectBoundKeyRejectsAProjectOwnedByAnotherTenant(t *testing.T) {
+	store := &managerMemoryStore{keys: map[string]StoredKey{}, projectTenants: map[string]string{"project-b": "tenant-b"}}
+	manager := KeyManager{Environment: "prod", Store: store}
+	issuer := Principal{Kind: KeyTenant, TenantID: "tenant-a", Scopes: NewScopeSet(ScopeKeysManage)}
+	_, err := manager.CreateDelegatedKey(context.Background(), issuer, DelegatedKeyInput{Kind: KeyReadOnly, ProjectID: "project-b", Scopes: []string{ScopeProjectsRead}})
+	if !errors.Is(err, ErrInvalidKeyRequest) {
+		t.Fatalf("foreign project error=%v, want ErrInvalidKeyRequest", err)
 	}
 }

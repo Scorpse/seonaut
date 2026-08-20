@@ -75,6 +75,7 @@ type Dependencies struct {
 	Build        BuildInfo
 	PlatformKeys PlatformKeyService
 	Tenants      TenantService
+	Projects     ProjectService
 }
 
 type server struct {
@@ -103,6 +104,10 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.Handle("GET /api/v1/keys", requestIDMiddleware(http.HandlerFunc(s.listTenantKeys)))
 	mux.Handle("POST /api/v1/keys/{key_id}/rotate", requestIDMiddleware(http.HandlerFunc(s.rotateTenantKey)))
 	mux.Handle("POST /api/v1/keys/{key_id}/revoke", requestIDMiddleware(http.HandlerFunc(s.revokeTenantKey)))
+	mux.Handle("PUT /api/v1/projects/{external_project_id}", requestIDMiddleware(http.HandlerFunc(s.putProject)))
+	mux.Handle("GET /api/v1/projects", requestIDMiddleware(http.HandlerFunc(s.listProjects)))
+	mux.Handle("GET /api/v1/projects/{project_id}", requestIDMiddleware(http.HandlerFunc(s.getProject)))
+	mux.Handle("PATCH /api/v1/projects/{project_id}", requestIDMiddleware(http.HandlerFunc(s.patchProject)))
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {

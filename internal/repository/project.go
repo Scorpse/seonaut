@@ -12,7 +12,7 @@ type ProjectRepository struct {
 }
 
 // SaveProject inserts a new project into the database.
-func (ds *ProjectRepository) SaveProject(project *models.Project, uid int) {
+func (ds *ProjectRepository) SaveProject(project *models.Project, uid int) error {
 	query := `
 		INSERT INTO projects (
 			url,
@@ -30,9 +30,12 @@ func (ds *ProjectRepository) SaveProject(project *models.Project, uid int) {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	stmt, _ := ds.DB.Prepare(query)
+	stmt, err := ds.DB.Prepare(query)
+	if err != nil {
+		return err
+	}
 	defer stmt.Close()
-	_, err := stmt.Exec(
+	_, err = stmt.Exec(
 		project.URL,
 		project.IgnoreRobotsTxt,
 		project.FollowNofollow,
@@ -45,9 +48,7 @@ func (ds *ProjectRepository) SaveProject(project *models.Project, uid int) {
 		project.Archive,
 		project.UserAgent,
 	)
-	if err != nil {
-		log.Printf("saveProject: %v\n", err)
-	}
+	return err
 }
 
 // FindProjectsByUser returns a slice with all the projects of the specified user.

@@ -29,6 +29,7 @@ func NewServer(container *services.Container) {
 		Build:        buildinfo.Current(),
 		PlatformKeys: container.APIKeyManager,
 		Tenants:      container.APITenantManager,
+		Projects:     container.APIProjectManager,
 	})
 
 	// Handle static files

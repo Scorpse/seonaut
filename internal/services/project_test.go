@@ -18,12 +18,14 @@ const (
 )
 
 // Create a test repository for the service.
-type projectTestRepository struct{}
+type projectTestRepository struct{ saveErr error }
 
-func (s *projectTestRepository) SaveProject(project *models.Project, userId int) {}
-func (s *projectTestRepository) DeleteProject(project *models.Project)           {}
-func (s *projectTestRepository) DisableProject(project *models.Project)          {}
-func (s *projectTestRepository) UpdateProject(p *models.Project) error           { return nil }
+func (s *projectTestRepository) SaveProject(project *models.Project, userId int) error {
+	return s.saveErr
+}
+func (s *projectTestRepository) DeleteProject(project *models.Project)  {}
+func (s *projectTestRepository) DisableProject(project *models.Project) {}
+func (s *projectTestRepository) UpdateProject(p *models.Project) error  { return nil }
 func (p *projectTestRepository) FindProjectsByUser(uid int) []models.Project {
 	return []models.Project{}
 }
@@ -106,6 +108,15 @@ func TestSaveProject(t *testing.T) {
 				t.Errorf("SaveProject() want error %v got %v", tt.wantError, err)
 			}
 		})
+	}
+}
+
+func TestSaveProjectReturnsPersistenceErrors(t *testing.T) {
+	want := errors.New("database unavailable")
+	service := services.NewProjectService(&projectTestRepository{saveErr: want}, &ArchiveDeleter{})
+	err := service.SaveProject(&models.Project{URL: projectURL, UserAgent: userAgent}, guid)
+	if !errors.Is(err, want) {
+		t.Fatalf("SaveProject error=%v, want %v", err, want)
 	}
 }
 

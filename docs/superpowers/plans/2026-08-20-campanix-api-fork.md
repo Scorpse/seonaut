@@ -93,11 +93,11 @@
 **Interfaces:**
 - Produces: `PUT/GET/PATCH /api/v1/projects`, normalized request hashing, tenant-scoped opaque project IDs.
 
-- [ ] Write two-tenant tests for lists, direct IDs, project-bound read-only keys, idempotent replay, conflicting payload reuse, unknown fields, and forbidden schemes.
-- [ ] Verify red tests.
-- [ ] Add bindings and idempotency tables, then owner-predicate repository queries.
-- [ ] Reuse `ProjectService` validation through a transport-neutral save method that returns errors instead of logging them away.
-- [ ] Run focused, repository integration, and full race tests; commit `MKT-281 add tenant-scoped project provisioning`.
+- [x] Write two-tenant tests for lists, direct IDs, project-bound read-only keys, idempotent replay, conflicting payload reuse, unknown fields, and forbidden schemes.
+- [x] Verify red tests.
+- [x] Add bindings and idempotency tables, then owner-predicate repository queries.
+- [x] Reuse `ProjectService` validation through a transport-neutral save method that returns errors instead of logging them away.
+- [x] Run focused, repository integration, and full race tests; commit `MKT-281 add tenant-scoped project provisioning`.
 
 ### Task 5: Durable asynchronous crawl lifecycle
 

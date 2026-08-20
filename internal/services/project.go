@@ -1,11 +1,10 @@
 package services
 
 import (
-	"errors"
 	"net/url"
-	"strings"
 
 	"github.com/stjudewashere/seonaut/internal/models"
+	"github.com/stjudewashere/seonaut/internal/projectvalidation"
 )
 
 type (
@@ -13,7 +12,7 @@ type (
 		DeleteArchive(*models.Project)
 	}
 	ProjectServiceRepository interface {
-		SaveProject(*models.Project, int)
+		SaveProject(*models.Project, int) error
 		DeleteProject(*models.Project)
 		DisableProject(*models.Project)
 		UpdateProject(p *models.Project) error
@@ -31,10 +30,10 @@ type (
 
 var (
 	// Error returned when the project's URL scheme is not http or https.
-	ErrProtocolNotSupported = errors.New("protocol not supported")
+	ErrProtocolNotSupported = projectvalidation.ErrProtocolNotSupported
 
 	// Error returned when the project's user agent is empty.
-	ErrUserAgent = errors.New("user agent string must not be empty")
+	ErrUserAgent = projectvalidation.ErrUserAgent
 )
 
 func NewProjectService(r ProjectServiceRepository, a ArchiveRemover) *ProjectService {
@@ -48,16 +47,12 @@ func NewProjectService(r ProjectServiceRepository, a ArchiveRemover) *ProjectSer
 // It trims the spaces in the project's URL field and checks the scheme to
 // make sure it is http or https.
 func (s *ProjectService) SaveProject(p *models.Project, userId int) error {
-	p.URL = strings.TrimSpace(p.URL)
-
-	err := s.validateProject(p)
+	err := projectvalidation.Prepare(p)
 	if err != nil {
 		return err
 	}
 
-	s.repository.SaveProject(p, userId)
-
-	return nil
+	return s.repository.SaveProject(p, userId)
 }
 
 // Return a project specified by id and user.
@@ -93,7 +88,7 @@ func (s *ProjectService) DeleteProject(p *models.Project) {
 // UpdateProject updates the project details. It first validates the project, then if the
 // project's archive option is false it deletes any existing archive.
 func (s *ProjectService) UpdateProject(p *models.Project) error {
-	err := s.validateProject(p)
+	err := projectvalidation.Prepare(p)
 	if err != nil {
 		return err
 	}
@@ -116,24 +111,4 @@ func (s *ProjectService) DeleteAllUserProjects(user *models.User) {
 		s.repository.DeleteProject(&p)
 		s.archiveRemover.DeleteArchive(&p)
 	}
-}
-
-// validateProject checks the project's URL and User-Agent to make sure they are valid.
-// It is called when a project is saved or updated.
-func (s *ProjectService) validateProject(p *models.Project) error {
-	parsedURL, err := url.Parse(p.URL)
-	if err != nil {
-		return err
-	}
-
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return ErrProtocolNotSupported
-	}
-
-	p.UserAgent = strings.TrimSpace(p.UserAgent)
-	if p.UserAgent == "" {
-		return ErrUserAgent
-	}
-
-	return nil
 }

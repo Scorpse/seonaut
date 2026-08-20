@@ -40,6 +40,7 @@ type Container struct {
 	APIAuthenticator   api.Authenticator
 	APIKeyManager      api.KeyManager
 	APITenantManager   api.TenantManager
+	APIProjectManager  api.ProjectManager
 
 	db                   *sql.DB
 	issueRepository      *repository.IssueRepository
@@ -51,6 +52,7 @@ type Container struct {
 	dashboardRepository  *repository.DashboardRepository
 	apiKeyRepository     *repository.APIKeyRepository
 	apiTenantRepository  *repository.APITenantRepository
+	apiProjectRepository *repository.APIProjectRepository
 }
 
 func (c *Container) Ready(ctx context.Context) error {
@@ -128,6 +130,7 @@ func (c *Container) InitRepositories() {
 	c.dashboardRepository = &repository.DashboardRepository{DB: c.db}
 	c.apiKeyRepository = &repository.APIKeyRepository{DB: c.db}
 	c.apiTenantRepository = &repository.APITenantRepository{DB: c.db}
+	c.apiProjectRepository = &repository.APIProjectRepository{DB: c.db}
 
 	// Clean up unfinished crawls.
 	c.crawlRepository.DeleteUnfinishedCrawls()
@@ -136,6 +139,7 @@ func (c *Container) InitRepositories() {
 func (c *Container) InitAPIServices() {
 	c.APIAuthenticator, c.APIKeyManager = NewAPIServices(c.Config.API, c.apiKeyRepository)
 	c.APITenantManager = api.TenantManager{Store: c.apiTenantRepository, Keys: c.APIKeyManager}
+	c.APIProjectManager = api.ProjectManager{Store: c.apiProjectRepository}
 }
 
 // Create the PubSub broker.

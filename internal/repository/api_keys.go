@@ -150,6 +150,18 @@ func (r APIKeyRepository) RevokeTenantAPIKey(ctx context.Context, tenantID, publ
 	return nil
 }
 
+func (r APIKeyRepository) ProjectBelongsToTenant(ctx context.Context, tenantID, projectID string) (bool, error) {
+	if r.DB == nil || tenantID == "" || projectID == "" {
+		return false, nil
+	}
+	var exists int
+	err := r.DB.QueryRowContext(ctx, `SELECT 1 FROM api_projects WHERE tenant_id = ? AND id = ? LIMIT 1`, tenantID, projectID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && exists == 1, err
+}
+
 type rowScanner interface {
 	Scan(...any) error
 }

@@ -27,6 +27,10 @@ type TenantMutableKeyStore interface {
 	RevokeTenantAPIKey(context.Context, string, string, time.Time) error
 }
 
+type ProjectBoundKeyStore interface {
+	ProjectBelongsToTenant(context.Context, string, string) (bool, error)
+}
+
 type KeyManager struct {
 	Environment     string
 	Store           MutableKeyStore
@@ -108,6 +112,19 @@ func (m KeyManager) CreateDelegatedKey(ctx context.Context, issuer Principal, in
 	}
 	if input.Kind != KeyTenant && input.Kind != KeyReadOnly || input.Kind == KeyTenant && input.ProjectID != "" || !validTenantScopes(input.Scopes, input.Kind) {
 		return IssuedKey{}, ErrInvalidKeyRequest
+	}
+	if input.ProjectID != "" {
+		store, ok := m.Store.(ProjectBoundKeyStore)
+		if !ok {
+			return IssuedKey{}, ErrInvalidKeyRequest
+		}
+		belongs, err := store.ProjectBelongsToTenant(ctx, issuer.TenantID, input.ProjectID)
+		if err != nil {
+			return IssuedKey{}, err
+		}
+		if !belongs {
+			return IssuedKey{}, ErrInvalidKeyRequest
+		}
 	}
 	return m.issueBound(ctx, input.Kind, issuer.TenantID, input.ProjectID, input.Scopes, input.ExpiresAt, "")
 }
