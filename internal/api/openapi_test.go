@@ -41,6 +41,18 @@ func TestOpenAPIContractUsesHandlerTypesAndContainsEveryRouteFamily(t *testing.T
 	if _, ok := crawl["properties"].(map[string]any)["state"]; !ok {
 		t.Fatalf("APICrawl was not generated from its JSON fields: %#v", crawl)
 	}
+	projectsGet := paths["/api/v1/projects"].(map[string]any)["get"].(map[string]any)
+	projectsResponse := projectsGet["responses"].(map[string]any)["200"].(map[string]any)
+	projectsSchema := projectsResponse["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	projectsProperties := projectsSchema["properties"].(map[string]any)
+	if projectsProperties["data"].(map[string]any)["type"] != "array" || projectsProperties["page"] == nil {
+		t.Fatalf("project collection contract is inaccurate: %#v", projectsProperties)
+	}
+	archiveGet := paths["/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/archive.wacz"].(map[string]any)["get"].(map[string]any)
+	archiveResponse := archiveGet["responses"].(map[string]any)["200"].(map[string]any)
+	if archiveResponse["content"].(map[string]any)["application/wacz"] == nil {
+		t.Fatalf("archive media contract is missing: %#v", archiveResponse)
+	}
 	serialized := strings.ToLower(res.Body.String())
 	for _, forbidden := range []string{"root_hash", "secret_hash", "authorization"} {
 		if strings.Contains(serialized, forbidden) {

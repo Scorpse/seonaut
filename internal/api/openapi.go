@@ -14,40 +14,56 @@ type openAPIRoute struct {
 	status   string
 	request  string
 	response string
+	mode     string
+	media    string
+	class    RateClass
+	public   bool
 }
 
 var openAPIRoutes = []openAPIRoute{
-	{"get", "/api/v1/health", "health.read", "200", "", ""},
-	{"get", "/api/v1/openapi.json", "openapi.read", "200", "", ""},
-	{"get", "/api/v1/meta", "meta.read", "200", "", ""},
-	{"post", "/api/v1/root/platform-keys", "platform_keys.create", "201", "CreateKeyInput", "IssuedKey"},
-	{"get", "/api/v1/root/platform-keys", "platform_keys.list", "200", "", "KeyMetadata"},
-	{"post", "/api/v1/root/platform-keys/{key_id}/rotate", "platform_keys.rotate", "201", "", "IssuedKey"},
-	{"post", "/api/v1/root/platform-keys/{key_id}/revoke", "platform_keys.revoke", "204", "", ""},
-	{"put", "/api/v1/tenants/{external_tenant_id}", "tenants.provision", "200", "", "TenantBinding"},
-	{"get", "/api/v1/tenants/{external_tenant_id}", "tenants.read", "200", "", "TenantBinding"},
-	{"post", "/api/v1/tenants/{external_tenant_id}/keys", "tenant_keys.create_initial", "201", "CreateKeyInput", "IssuedKey"},
-	{"post", "/api/v1/keys", "tenant_keys.create", "201", "DelegatedKeyInput", "IssuedKey"},
-	{"get", "/api/v1/keys", "tenant_keys.list", "200", "", "KeyMetadata"},
-	{"post", "/api/v1/keys/{key_id}/rotate", "tenant_keys.rotate", "201", "", "IssuedKey"},
-	{"post", "/api/v1/keys/{key_id}/revoke", "tenant_keys.revoke", "204", "", ""},
-	{"put", "/api/v1/projects/{external_project_id}", "projects.put", "201", "ProjectInput", "Project"},
-	{"get", "/api/v1/projects", "projects.list", "200", "", "Project"},
-	{"get", "/api/v1/projects/{project_id}", "projects.read", "200", "", "Project"},
-	{"patch", "/api/v1/projects/{project_id}", "projects.patch", "200", "ProjectPatch", "Project"},
-	{"post", "/api/v1/projects/{project_id}/crawls", "crawls.start", "202", "", "APICrawl"},
-	{"get", "/api/v1/projects/{project_id}/crawls", "crawls.list", "200", "", "APICrawl"},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}", "crawls.read", "200", "", "APICrawl"},
-	{"post", "/api/v1/projects/{project_id}/crawls/{crawl_id}/cancel", "crawls.cancel", "202", "", "APICrawl"},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/issues", "findings.issues", "200", "", "IssueFinding"},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/pages", "findings.pages", "200", "", "PageFinding"},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/links", "findings.links", "200", "", "LinkFinding"},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/resources", "findings.resources", "200", "", "ResourceFinding"},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/issues.csv", "exports.issues_csv", "200", "", ""},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/pages.csv", "exports.pages_csv", "200", "", ""},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/resources.csv", "exports.resources_csv", "200", "", ""},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/sitemap.xml", "exports.sitemap", "200", "", ""},
-	{"get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/archive.wacz", "exports.archive", "200", "", ""},
+	publicAPIRoute("get", "/api/v1/health", "health.read"),
+	publicAPIRoute("get", "/api/v1/openapi.json", "openapi.read"),
+	apiRoute("get", "/api/v1/meta", "meta.read", "200", "", "", "raw", RateRead),
+	apiRoute("post", "/api/v1/root/platform-keys", "platform_keys.create", "201", "CreateKeyInput", "IssuedKey", "single", RateNone),
+	apiRoute("get", "/api/v1/root/platform-keys", "platform_keys.list", "200", "", "KeyMetadata", "list", RateRead),
+	apiRoute("post", "/api/v1/root/platform-keys/{key_id}/rotate", "platform_keys.rotate", "201", "", "IssuedKey", "single", RateNone),
+	apiRoute("post", "/api/v1/root/platform-keys/{key_id}/revoke", "platform_keys.revoke", "204", "", "", "raw", RateNone),
+	apiRoute("put", "/api/v1/tenants/{external_tenant_id}", "tenants.provision", "200", "", "TenantBinding", "single", RateNone),
+	apiRoute("get", "/api/v1/tenants/{external_tenant_id}", "tenants.read", "200", "", "TenantBinding", "single", RateRead),
+	apiRoute("post", "/api/v1/tenants/{external_tenant_id}/keys", "tenant_keys.create_initial", "201", "CreateKeyInput", "IssuedKey", "single", RateNone),
+	apiRoute("post", "/api/v1/keys", "tenant_keys.create", "201", "DelegatedKeyInput", "IssuedKey", "single", RateNone),
+	apiRoute("get", "/api/v1/keys", "tenant_keys.list", "200", "", "KeyMetadata", "list", RateRead),
+	apiRoute("post", "/api/v1/keys/{key_id}/rotate", "tenant_keys.rotate", "201", "", "IssuedKey", "single", RateNone),
+	apiRoute("post", "/api/v1/keys/{key_id}/revoke", "tenant_keys.revoke", "204", "", "", "raw", RateNone),
+	apiRoute("put", "/api/v1/projects/{external_project_id}", "projects.put", "201", "ProjectInput", "Project", "single", RateNone),
+	apiRoute("get", "/api/v1/projects", "projects.list", "200", "", "Project", "page", RateRead),
+	apiRoute("get", "/api/v1/projects/{project_id}", "projects.read", "200", "", "Project", "single", RateRead),
+	apiRoute("patch", "/api/v1/projects/{project_id}", "projects.patch", "200", "ProjectPatch", "Project", "single", RateNone),
+	apiRoute("post", "/api/v1/projects/{project_id}/crawls", "crawls.start", "202", "", "APICrawl", "single", RateCrawl),
+	apiRoute("get", "/api/v1/projects/{project_id}/crawls", "crawls.list", "200", "", "APICrawl", "page", RateRead),
+	apiRoute("get", "/api/v1/projects/{project_id}/crawls/{crawl_id}", "crawls.read", "200", "", "APICrawl", "single", RateRead),
+	apiRoute("post", "/api/v1/projects/{project_id}/crawls/{crawl_id}/cancel", "crawls.cancel", "202", "", "APICrawl", "single", RateNone),
+	apiRoute("get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/issues", "findings.issues", "200", "", "IssueFinding", "page", RateRead),
+	apiRoute("get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/pages", "findings.pages", "200", "", "PageFinding", "page", RateRead),
+	apiRoute("get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/links", "findings.links", "200", "", "LinkFinding", "page", RateRead),
+	apiRoute("get", "/api/v1/projects/{project_id}/crawls/{crawl_id}/resources", "findings.resources", "200", "", "ResourceFinding", "page", RateRead),
+	exportAPIRoute("/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/issues.csv", "exports.issues_csv", "text/csv"),
+	exportAPIRoute("/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/pages.csv", "exports.pages_csv", "text/csv"),
+	exportAPIRoute("/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/resources.csv", "exports.resources_csv", "text/csv"),
+	exportAPIRoute("/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/sitemap.xml", "exports.sitemap", "application/xml"),
+	exportAPIRoute("/api/v1/projects/{project_id}/crawls/{crawl_id}/exports/archive.wacz", "exports.archive", "application/wacz"),
+}
+
+func publicAPIRoute(method, path, action string) openAPIRoute {
+	return openAPIRoute{method: method, path: path, action: action, status: "200", mode: "raw", public: true}
+}
+
+func apiRoute(method, path, action, status, request, response, mode string, class RateClass) openAPIRoute {
+	return openAPIRoute{method: method, path: path, action: action, status: status, request: request, response: response, mode: mode, class: class}
+}
+
+func exportAPIRoute(path, action, media string) openAPIRoute {
+	return openAPIRoute{method: "get", path: path, action: action, status: "200", mode: "file", media: media, class: RateExport}
 }
 
 func (s *server) openAPI(w http.ResponseWriter, r *http.Request) {
@@ -74,16 +90,19 @@ func buildOpenAPIDocument(build BuildInfo) map[string]any {
 			operations = map[string]any{}
 			paths[route.path] = operations
 		}
-		responses := map[string]any{route.status: responseSchema(route.response)}
-		if route.path != "/api/v1/health" && route.path != "/api/v1/openapi.json" {
+		responses := map[string]any{route.status: responseSchema(route)}
+		if !route.public {
 			responses["429"] = errorResponseSchema()
+		}
+		if route.action == "exports.archive" {
+			responses["202"] = map[string]any{"description": "Archive is still being prepared", "headers": map[string]any{"Retry-After": map[string]any{"schema": map[string]any{"type": "integer"}}}}
 		}
 		operation := map[string]any{
 			"operationId": strings.ReplaceAll(route.action, ".", "_"),
 			"responses":   responses,
 			"parameters":  pathParameters(route.path),
 		}
-		if route.path != "/api/v1/health" && route.path != "/api/v1/openapi.json" {
+		if !route.public {
 			operation["security"] = []any{map[string]any{"bearerAuth": []string{}}}
 		}
 		if route.request != "" {
@@ -102,13 +121,24 @@ func buildOpenAPIDocument(build BuildInfo) map[string]any {
 	}
 }
 
-func responseSchema(name string) map[string]any {
-	if name == "" {
+func responseSchema(route openAPIRoute) map[string]any {
+	if route.mode == "file" {
+		return map[string]any{"description": "Export stream", "content": map[string]any{route.media: map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}}
+	}
+	if route.response == "" {
 		return map[string]any{"description": "Successful response"}
 	}
-	return map[string]any{"description": "Successful response", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{
-		"type": "object", "properties": map[string]any{"data": schemaReference(name), "request_id": map[string]any{"type": "string"}},
-	}}}}
+	dataSchema := any(schemaReference(route.response))
+	if route.mode == "list" || route.mode == "page" {
+		dataSchema = map[string]any{"type": "array", "items": schemaReference(route.response)}
+	}
+	properties := map[string]any{"data": dataSchema, "request_id": map[string]any{"type": "string"}}
+	if route.mode == "page" {
+		properties["page"] = map[string]any{"type": "object", "properties": map[string]any{
+			"next_cursor": map[string]any{"type": []string{"string", "null"}}, "limit": map[string]any{"type": "integer"},
+		}}
+	}
+	return map[string]any{"description": "Successful response", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "object", "properties": properties}}}}
 }
 
 func errorResponseSchema() map[string]any {

@@ -35,11 +35,12 @@ type UIConfig struct {
 }
 
 type APIConfig struct {
-	Environment            string `mapstructure:"environment"`
-	RootPublicID           string `mapstructure:"root_public_id"`
-	RootHash               string `mapstructure:"root_hash"`
-	CursorSecret           string `mapstructure:"cursor_secret"`
-	RotationOverlapSeconds int    `mapstructure:"rotation_overlap_seconds"`
+	Environment            string   `mapstructure:"environment"`
+	RootPublicID           string   `mapstructure:"root_public_id"`
+	RootHash               string   `mapstructure:"root_hash"`
+	CursorSecret           string   `mapstructure:"cursor_secret"`
+	RotationOverlapSeconds int      `mapstructure:"rotation_overlap_seconds"`
+	FixtureHosts           []string `mapstructure:"fixture_hosts"`
 }
 
 // Config stores the configuration for the application.

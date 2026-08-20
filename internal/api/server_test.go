@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,34 @@ func TestHealthReturnsServiceUnavailableWhenDatabaseIsNotReady(t *testing.T) {
 		t.Fatalf("status = %d, want %d", res.Code, http.StatusServiceUnavailable)
 	}
 	assertErrorCode(t, res, "service_unavailable")
+}
+
+func TestRequestIDAcceptsSafeCorrelationTokensAndRegeneratesUnsafeValues(t *testing.T) {
+	handler := NewHandler(Dependencies{})
+	for _, test := range []struct {
+		name     string
+		supplied string
+		kept     bool
+	}{
+		{name: "safe", supplied: "client.trace-01", kept: true},
+		{name: "oversized", supplied: strings.Repeat("a", 81)},
+		{name: "credential shaped", supplied: "snk_test_public.secret"},
+		{name: "non ascii", supplied: "client-é"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+			req.Header.Set("X-Request-ID", test.supplied)
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+			got := res.Header().Get("X-Request-ID")
+			if test.kept && got != test.supplied {
+				t.Fatalf("safe request ID changed: %q", got)
+			}
+			if !test.kept && (got == test.supplied || !strings.HasPrefix(got, "req_") || len(got) != 36) {
+				t.Fatalf("unsafe request ID not regenerated: %q", got)
+			}
+		})
+	}
 }
 
 func TestMetaRequiresNonRootMetaReadPrincipal(t *testing.T) {

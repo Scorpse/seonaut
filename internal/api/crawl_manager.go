@@ -23,6 +23,7 @@ type CrawlCompletion struct {
 }
 
 type CrawlStore interface {
+	FindCrawlReplay(context.Context, Principal, string, string, string) (APICrawl, bool, error)
 	ReserveCrawl(context.Context, Principal, string, string, string) (APICrawl, bool, error)
 	MarkCrawlRunning(context.Context, Principal, string, int64, time.Time) error
 	CompleteCrawl(context.Context, string, string, CrawlCompletion) error
@@ -62,6 +63,11 @@ func (m CrawlManager) StartCrawl(ctx context.Context, principal Principal, proje
 	if idempotencyKey == "" || len(idempotencyKey) > 191 {
 		return APICrawl{}, false, ErrIdempotencyKeyRequired
 	}
+	hashBytes := sha256.Sum256([]byte("project_id=" + projectID))
+	requestHash := hex.EncodeToString(hashBytes[:])
+	if crawl, replayed, err := m.Store.FindCrawlReplay(ctx, principal, projectID, idempotencyKey, requestHash); err != nil || replayed {
+		return crawl, replayed, err
+	}
 	releaseSlot := func() {}
 	if m.Slots != nil {
 		var acquired bool
@@ -89,8 +95,7 @@ func (m CrawlManager) StartCrawl(ctx context.Context, principal Principal, proje
 			return APICrawl{}, false, err
 		}
 	}
-	hashBytes := sha256.Sum256([]byte("project_id=" + projectID))
-	crawl, replayed, err := m.Store.ReserveCrawl(ctx, principal, projectID, idempotencyKey, hex.EncodeToString(hashBytes[:]))
+	crawl, replayed, err := m.Store.ReserveCrawl(ctx, principal, projectID, idempotencyKey, requestHash)
 	if err != nil || replayed {
 		return crawl, replayed, err
 	}

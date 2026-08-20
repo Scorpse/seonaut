@@ -159,7 +159,7 @@ func (c *Container) InitRepositories() {
 
 func (c *Container) InitAPIServices() {
 	var err error
-	c.APITargetPolicy, err = api.NewTargetPolicy(c.Config.API.Environment, nil, nil)
+	c.APITargetPolicy, err = api.NewTargetPolicy(c.Config.API.Environment, c.Config.API.FixtureHosts, nil)
 	if err != nil {
 		log.Fatalf("Configure API target policy: %v", err)
 	}

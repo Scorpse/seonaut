@@ -23,11 +23,34 @@ const (
 	completeAPICrawlSQL         = `UPDATE api_crawls SET state = ?, active_slot = ?, failure_code = ?, failure_message = ?, total_urls = ?, total_issues = ?, finished_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ? AND state IN ('queued', 'running') AND active_slot = 1`
 	findAPICrawlStateSQL        = `SELECT state FROM api_crawls WHERE tenant_id = ? AND id = ? LIMIT 1`
 	requestCancelAPICrawlSQL    = `UPDATE api_crawls SET cancel_requested = 1, updated_at = ? WHERE tenant_id = ? AND project_id = ? AND id = ? AND state IN ('queued', 'running')`
+	findAPICrawlReplaySQL       = `SELECT request_hash, resource_id FROM api_idempotency WHERE key_public_id = ? AND tenant_id = ? AND operation = 'crawls.start' AND idempotency_key = ? LIMIT 1`
 )
 
 type APICrawlRepository struct {
 	DB  *sql.DB
 	Now func() time.Time
+}
+
+func (r APICrawlRepository) FindCrawlReplay(ctx context.Context, principal api.Principal, projectID, idempotencyKey, requestHash string) (api.APICrawl, bool, error) {
+	if r.DB == nil || principal.KeyID == "" || principal.TenantID == "" || projectID == "" {
+		return api.APICrawl{}, false, api.ErrCrawlNotFound
+	}
+	var storedHash, crawlID string
+	err := r.DB.QueryRowContext(ctx, findAPICrawlReplaySQL, principal.KeyID, principal.TenantID, idempotencyKey).Scan(&storedHash, &crawlID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return api.APICrawl{}, false, nil
+	}
+	if err != nil {
+		return api.APICrawl{}, false, err
+	}
+	if storedHash != requestHash {
+		return api.APICrawl{}, false, api.ErrIdempotencyConflict
+	}
+	crawl, err := r.GetCrawl(ctx, principal, projectID, crawlID)
+	if err != nil {
+		return api.APICrawl{}, false, err
+	}
+	return crawl, true, nil
 }
 
 func (r APICrawlRepository) ReserveCrawl(ctx context.Context, principal api.Principal, projectID, idempotencyKey, requestHash string) (api.APICrawl, bool, error) {

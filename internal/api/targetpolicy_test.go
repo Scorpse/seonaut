@@ -21,7 +21,7 @@ func (r staticResolver) LookupNetIP(_ context.Context, _ string, host string) ([
 func TestTargetPolicyRejectsNonPublicTargets(t *testing.T) {
 	blocked := []string{
 		"127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.0.1", "169.254.169.254",
-		"0.0.0.0", "224.0.0.1", "::1", "fd00::1", "fe80::1", "ff02::1", "::",
+		"100.100.100.200", "198.18.0.1", "0.0.0.0", "224.0.0.1", "::1", "fd00::1", "fe80::1", "ff02::1", "::",
 	}
 	for _, address := range blocked {
 		t.Run(address, func(t *testing.T) {
@@ -53,7 +53,7 @@ func TestTargetPolicyRejectsUnsafeSchemesCredentialsAndMixedDNS(t *testing.T) {
 	}
 }
 
-func TestTargetPolicyAllowsPublicTargetsAndTestOnlyFixtureHosts(t *testing.T) {
+func TestTargetPolicyAllowsPublicTargetsAndProductionBuildDisablesFixtureHosts(t *testing.T) {
 	policy, err := NewTargetPolicy("production", nil, staticResolver{"public.example": {netip.MustParseAddr("8.8.8.8")}})
 	if err != nil {
 		t.Fatal(err)
@@ -66,13 +66,10 @@ func TestTargetPolicyAllowsPublicTargetsAndTestOnlyFixtureHosts(t *testing.T) {
 	if _, err := NewTargetPolicy("production", []string{"fixture.test"}, staticResolver{}); !errors.Is(err, ErrTargetAllowlistDisabled) {
 		t.Fatalf("production allowlist error = %v", err)
 	}
-	testPolicy, err := NewTargetPolicy("test", []string{"fixture.test"}, staticResolver{"fixture.test": {netip.MustParseAddr("127.0.0.1")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixtureURL, _ := url.Parse("http://fixture.test:8080/")
-	if err := testPolicy.ValidateURL(context.Background(), fixtureURL); err != nil {
-		t.Fatalf("fixture target rejected: %v", err)
+	if !fixtureTargetAllowlistEnabled {
+		if _, err := NewTargetPolicy("test", []string{"fixture.test"}, staticResolver{}); !errors.Is(err, ErrTargetAllowlistDisabled) {
+			t.Fatalf("production build enabled fixture allowlist: %v", err)
+		}
 	}
 }
 

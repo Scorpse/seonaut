@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type AuditRecord struct {
@@ -106,7 +108,7 @@ func (s *server) recordAudit(r *http.Request, action string, principal Principal
 	}
 	record := AuditRecord{
 		RequestID: requestIDFrom(r.Context()), KeyPublicID: principal.KeyID, TenantID: principal.TenantID,
-		ProjectID: r.PathValue("project_id"), CrawlID: r.PathValue("crawl_id"), Action: action,
+		ProjectID: auditOpaqueID(r.PathValue("project_id")), CrawlID: auditOpaqueID(r.PathValue("crawl_id")), Action: action,
 		Outcome: auditOutcome(status), HTTPStatus: status, SourceIP: sourceIP(r.RemoteAddr),
 		Metadata: map[string]string{"method": r.Method, "key_kind": string(principal.Kind)}, CreatedAt: time.Now().UTC(),
 	}
@@ -115,6 +117,18 @@ func (s *server) recordAudit(r *http.Request, action string, principal Principal
 	if err := s.deps.Audit.RecordAudit(auditContext, record); err != nil {
 		log.Printf("record API audit request_id=%s action=%s: %v", record.RequestID, action, err)
 	}
+}
+
+func auditOpaqueID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) != 36 {
+		return ""
+	}
+	parsed, err := uuid.Parse(value)
+	if err != nil || parsed.String() != strings.ToLower(value) {
+		return ""
+	}
+	return parsed.String()
 }
 
 func auditOutcome(status int) string {

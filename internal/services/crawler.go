@@ -77,13 +77,17 @@ func NewCrawlerService(r CrawlerServiceRepository, s CrawlerServicesContainer) *
 // running or if there's an error creating it.
 // Finally the previous crawl's data is removed and the crawl is returned.
 func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) error {
-	_, err := s.StartCrawlerObserved(p, b, "", nil)
+	_, err := s.startCrawlerObserved(p, b, "", nil, false)
 	return err
 }
 
 // StartCrawlerObserved preserves completed crawl data for API callers while
 // exposing the upstream crawl ID and one terminal callback.
 func (s *CrawlerService) StartCrawlerObserved(p models.Project, b models.BasicAuth, archiveID string, completed func(*models.Crawl, bool, bool, error)) (*models.Crawl, error) {
+	return s.startCrawlerObserved(p, b, archiveID, completed, true)
+}
+
+func (s *CrawlerService) startCrawlerObserved(p models.Project, b models.BasicAuth, archiveID string, completed func(*models.Crawl, bool, bool, error), strictTargets bool) (*models.Crawl, error) {
 	u, err := url.Parse(p.URL)
 	if err != nil {
 		return nil, err
@@ -96,7 +100,7 @@ func (s *CrawlerService) StartCrawlerObserved(p models.Project, b models.BasicAu
 	// Acquire the in-memory lock before any DB writes so that a rejected
 	// duplicate trigger cannot leave an orphaned crawl record with a NULL
 	// end timestamp.
-	c, err := s.addCrawler(u, &p, &b)
+	c, err := s.addCrawler(u, &p, &b, strictTargets)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +226,7 @@ func (s *CrawlerService) StopCrawler(p models.Project) {
 // AddCrawler creates a new project crawler and adds it to the crawlers map. It returns the crawler
 // on success otherwise it returns an error indicating the crawler already exists or there was an
 // error creating it.
-func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.BasicAuth) (*crawler.Crawler, error) {
+func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.BasicAuth, strictTargets bool) (*crawler.Crawler, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -242,11 +246,17 @@ func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.Bas
 	mainDomain := strings.TrimPrefix(u.Host, "www.")
 
 	httpClient := &http.Client{
-		Timeout:   ClientTimeout * time.Second,
-		Transport: s.transport,
+		Timeout: ClientTimeout * time.Second,
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+	var targetValidator crawler.TargetValidator
+	var maxResponseBytes int64
+	if strictTargets {
+		httpClient.Transport = s.transport
+		targetValidator = s.targetValidator
+		maxResponseBytes = maxBodySize
 	}
 
 	// Make sure the user agent is not empty
@@ -259,8 +269,8 @@ func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.Bas
 		BasicAuthDomains: []string{mainDomain, "www." + mainDomain},
 		AuthUser:         b.AuthUser,
 		AuthPass:         b.AuthPass,
-		TargetValidator:  s.targetValidator,
-		MaxResponseBytes: maxBodySize,
+		TargetValidator:  targetValidator,
+		MaxResponseBytes: maxResponseBytes,
 	}, httpClient)
 
 	// Creates a new crawler with the crawler's response handler.

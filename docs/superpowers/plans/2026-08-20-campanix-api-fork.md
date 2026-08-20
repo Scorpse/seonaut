@@ -152,11 +152,11 @@
 **Interfaces:**
 - Produces: production target policy covering first resolution and redirects, per-key read quotas, per-tenant crawl/export quotas, and `/api/v1/openapi.json`.
 
-- [ ] Write tests for loopback/private/link-local/multicast/unspecified/metadata IPv4 and IPv6, redirect re-resolution, DNS rebinding, test-only fixture allowlist, rate headers, and redacted audit rows.
-- [ ] Verify red tests.
-- [ ] Inject target validation into the crawler client connection/redirect path and enforce page/byte/time/concurrency budgets.
-- [ ] Add rate-limit/audit middleware and OpenAPI generated from handler request/response schemas.
-- [ ] Run security, race, and full tests; commit `MKT-281 enforce crawl security and publish API contract`.
+- [x] Write tests for loopback/private/link-local/multicast/unspecified/metadata IPv4 and IPv6, redirect re-resolution, DNS rebinding, test-only fixture allowlist, rate headers, and redacted audit rows.
+- [x] Verify red tests.
+- [x] Inject target validation into the crawler client connection/redirect path and enforce page/byte/time/concurrency budgets.
+- [x] Add rate-limit/audit middleware and OpenAPI generated from handler request/response schemas.
+- [x] Run security, race, and full tests; commit `MKT-281 enforce crawl security and publish API contract`.
 
 ### Task 8: Isolation fixture, image provenance, and rollback
 

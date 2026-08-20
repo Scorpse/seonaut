@@ -10,12 +10,17 @@ import (
 )
 
 type managerCrawlStore struct {
-	crawl      APICrawl
-	replayed   bool
-	reserveErr error
-	completed  []CrawlCompletion
-	runningID  int64
-	events     *[]string
+	crawl       APICrawl
+	replayed    bool
+	reserveErr  error
+	completed   []CrawlCompletion
+	runningID   int64
+	events      *[]string
+	replayFound bool
+}
+
+func (s *managerCrawlStore) FindCrawlReplay(context.Context, Principal, string, string, string) (APICrawl, bool, error) {
+	return s.crawl, s.replayFound, nil
 }
 
 func (s *managerCrawlStore) ReserveCrawl(context.Context, Principal, string, string, string) (APICrawl, bool, error) {
@@ -165,6 +170,22 @@ func TestCrawlManagerHoldsTenantSlotUntilCompletion(t *testing.T) {
 	store.crawl.ID = "crawl-b"
 	if _, _, err := manager.StartCrawl(context.Background(), principal, "project-b", "idem-c"); err != nil {
 		t.Fatalf("slot not released after completion: %v", err)
+	}
+}
+
+func TestCrawlManagerReturnsReplayWhenTenantSlotsAreFull(t *testing.T) {
+	budget := NewConcurrencyBudget(1, 1)
+	release, ok := budget.Acquire("tenant-a")
+	if !ok {
+		t.Fatal("failed to fill tenant slot")
+	}
+	defer release()
+	store := &managerCrawlStore{crawl: APICrawl{ID: "crawl-original", TenantID: "tenant-a", ProjectID: "project-a", State: CrawlRunning}, replayFound: true}
+	runner := &managerCrawlRunner{}
+	manager := CrawlManager{Store: store, Projects: managerProjectLookup{project: models.Project{Id: 7}}, Runner: runner, Slots: budget}
+	crawl, replayed, err := manager.StartCrawl(context.Background(), Principal{KeyID: "key-a", TenantID: "tenant-a"}, "project-a", "idem-original")
+	if err != nil || !replayed || crawl.ID != "crawl-original" || runner.started != 0 {
+		t.Fatalf("crawl=%+v replayed=%v started=%d err=%v", crawl, replayed, runner.started, err)
 	}
 }
 

@@ -66,6 +66,38 @@ func TestReadRateLimitReturnsStandardHeadersAndAuditsRedactedMetadata(t *testing
 	}
 }
 
+func TestAuditSanitizesRouteIdentifiers(t *testing.T) {
+	validProjectID := "00000000-0000-4000-8000-000000000001"
+	projects := &memoryProjects{
+		projects: map[string]Project{
+			"tenant-a:valid": {ID: validProjectID, ExternalID: "valid", TenantID: "tenant-a"},
+		},
+		replays: map[string]Project{},
+		hashes:  map[string]string{},
+	}
+	audit := &recordingAuditSink{}
+	handler := NewHandler(Dependencies{Authenticate: projectAuthenticator, Projects: projects, Audit: audit})
+
+	for _, projectID := range []string{validProjectID, strings.Repeat("x", 200), "snk_test_public.secret-token", "0123456789abcdef0123456789abcdef"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projectID, nil)
+		req.Header.Set("Authorization", "Bearer tenant-a")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+	}
+
+	if len(audit.records) != 4 {
+		t.Fatalf("audit records = %#v", audit.records)
+	}
+	if audit.records[0].ProjectID != validProjectID {
+		t.Fatalf("valid project id = %q", audit.records[0].ProjectID)
+	}
+	for index, record := range audit.records[1:] {
+		if record.ProjectID != "" {
+			t.Fatalf("unsafe project id %d persisted as %q", index, record.ProjectID)
+		}
+	}
+}
+
 func TestConcurrencyBudgetEnforcesPerTenantAndGlobalLimits(t *testing.T) {
 	budget := NewConcurrencyBudget(1, 2)
 	releaseA, ok := budget.Acquire("tenant-a")
