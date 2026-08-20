@@ -1,7 +1,9 @@
 package services
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"log"
 
 	"github.com/stjudewashere/seonaut/internal/config"
@@ -14,6 +16,8 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/mysql"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
+
+var ErrDatabaseUnavailable = errors.New("database unavailable")
 
 type Container struct {
 	Config             *config.Config
@@ -41,6 +45,13 @@ type Container struct {
 	exportRepository     *repository.ExportRepository
 	crawlRepository      *repository.CrawlRepository
 	dashboardRepository  *repository.DashboardRepository
+}
+
+func (c *Container) Ready(ctx context.Context) error {
+	if c.db == nil {
+		return ErrDatabaseUnavailable
+	}
+	return c.db.PingContext(ctx)
 }
 
 func NewContainer(configFile string) *Container {

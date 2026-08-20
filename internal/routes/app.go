@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/stjudewashere/seonaut/internal/api"
+	"github.com/stjudewashere/seonaut/internal/buildinfo"
 	"github.com/stjudewashere/seonaut/internal/models"
 	"github.com/stjudewashere/seonaut/internal/services"
 )
@@ -21,6 +23,11 @@ type PageView struct {
 
 // NewServer sets up the HTTP server routes and starts the HTTP server.
 func NewServer(container *services.Container) {
+	registerAPIRoutes(http.DefaultServeMux, api.Dependencies{
+		Ready: container.Ready,
+		Build: buildinfo.Current(),
+	})
+
 	// Handle static files
 	fileServer := http.FileServer(http.Dir("./web/static"))
 	http.Handle("GET /resources/", http.StripPrefix("/resources", fileServer))
@@ -98,4 +105,10 @@ func NewServer(container *services.Container) {
 	if err != nil {
 		log.Fatalf("error starting server: %v", err)
 	}
+}
+
+func registerAPIRoutes(mux *http.ServeMux, deps api.Dependencies) {
+	handler := api.NewHandler(deps)
+	mux.Handle("GET /api/v1/health", handler)
+	mux.Handle("GET /api/v1/meta", handler)
 }
