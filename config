@@ -16,3 +16,9 @@ agent = "Mozilla/5.0 (compatible; SEOnautBot/1.0; +https://seonaut.org/bot)"
 [UI]
 language = "en"
 theme = "dark"
+
+[api]
+environment = "dev"
+root_public_id = "root"
+root_hash = ""
+rotation_overlap_seconds = 300

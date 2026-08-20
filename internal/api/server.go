@@ -23,6 +23,23 @@ const (
 	KeyReadOnly KeyKind = "read_only"
 
 	ScopeMetaRead = "meta:read"
+
+	ScopePlatformKeysCreate = "platform_keys:create"
+	ScopePlatformKeysList   = "platform_keys:list"
+	ScopePlatformKeysRotate = "platform_keys:rotate"
+	ScopePlatformKeysRevoke = "platform_keys:revoke"
+	ScopeTenantsProvision   = "tenants:provision"
+	ScopeTenantKeysCreate   = "tenant_keys:create"
+	ScopeTenantKeysRotate   = "tenant_keys:rotate"
+	ScopeTenantKeysRevoke   = "tenant_keys:revoke"
+	ScopeProjectsRead       = "projects:read"
+	ScopeProjectsWrite      = "projects:write"
+	ScopeCrawlsRead         = "crawls:read"
+	ScopeCrawlsRun          = "crawls:run"
+	ScopeCrawlsCancel       = "crawls:cancel"
+	ScopeFindingsRead       = "findings:read"
+	ScopeExportsRead        = "exports:read"
+	ScopeKeysManage         = "keys:manage"
 )
 
 var ErrUnauthenticated = errors.New("unauthenticated")
@@ -56,6 +73,7 @@ type Dependencies struct {
 	Ready        func(context.Context) error
 	Authenticate AuthenticateFunc
 	Build        BuildInfo
+	PlatformKeys PlatformKeyService
 }
 
 type server struct {
@@ -64,10 +82,19 @@ type server struct {
 }
 
 func NewHandler(deps Dependencies) http.Handler {
-	s := &server{deps: deps, mux: http.NewServeMux()}
-	s.mux.HandleFunc("GET /api/v1/health", s.health)
-	s.mux.HandleFunc("GET /api/v1/meta", s.meta)
-	return requestIDMiddleware(s.mux)
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, deps)
+	return mux
+}
+
+func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
+	s := &server{deps: deps, mux: mux}
+	mux.Handle("GET /api/v1/health", requestIDMiddleware(http.HandlerFunc(s.health)))
+	mux.Handle("GET /api/v1/meta", requestIDMiddleware(http.HandlerFunc(s.meta)))
+	mux.Handle("POST /api/v1/root/platform-keys", requestIDMiddleware(http.HandlerFunc(s.createPlatformKey)))
+	mux.Handle("GET /api/v1/root/platform-keys", requestIDMiddleware(http.HandlerFunc(s.listPlatformKeys)))
+	mux.Handle("POST /api/v1/root/platform-keys/{key_id}/rotate", requestIDMiddleware(http.HandlerFunc(s.rotatePlatformKey)))
+	mux.Handle("POST /api/v1/root/platform-keys/{key_id}/revoke", requestIDMiddleware(http.HandlerFunc(s.revokePlatformKey)))
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {

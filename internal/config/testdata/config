@@ -11,3 +11,9 @@ database = "test"
 
 [crawler]
 agent = "testing"
+
+[api]
+environment = "test"
+root_public_id = "root"
+root_hash = "test-hash"
+rotation_overlap_seconds = 120

@@ -24,8 +24,10 @@ type PageView struct {
 // NewServer sets up the HTTP server routes and starts the HTTP server.
 func NewServer(container *services.Container) {
 	registerAPIRoutes(http.DefaultServeMux, api.Dependencies{
-		Ready: container.Ready,
-		Build: buildinfo.Current(),
+		Ready:        container.Ready,
+		Authenticate: container.APIAuthenticator.Authenticate,
+		Build:        buildinfo.Current(),
+		PlatformKeys: container.APIKeyManager,
 	})
 
 	// Handle static files
@@ -108,7 +110,5 @@ func NewServer(container *services.Container) {
 }
 
 func registerAPIRoutes(mux *http.ServeMux, deps api.Dependencies) {
-	handler := api.NewHandler(deps)
-	mux.Handle("GET /api/v1/health", handler)
-	mux.Handle("GET /api/v1/meta", handler)
+	api.RegisterRoutes(mux, deps)
 }

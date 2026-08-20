@@ -36,11 +36,18 @@ func TestLoadConfig(t *testing.T) {
 		{config.DB.Pass, "root"},
 		{config.DB.Name, "test"},
 		{config.Crawler.Agent, "testing"},
+		{config.API.Environment, "test"},
+		{config.API.RootPublicID, "root"},
+		{config.API.RootHash, "test-hash"},
 	}
 
 	for _, v := range m {
 		if v.input != v.want {
 			t.Errorf("%s != %s\n", v.input, v.want)
 		}
+	}
+
+	if config.API.RotationOverlapSeconds != 120 {
+		t.Fatalf("rotation overlap = %d, want 120", config.API.RotationOverlapSeconds)
 	}
 }

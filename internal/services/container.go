@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 
+	"github.com/stjudewashere/seonaut/internal/api"
 	"github.com/stjudewashere/seonaut/internal/config"
 	"github.com/stjudewashere/seonaut/internal/issues/multipage"
 	"github.com/stjudewashere/seonaut/internal/issues/page"
@@ -36,6 +37,8 @@ type Container struct {
 	CookieSession      *CookieSession
 	ArchiveService     *ArchiveService
 	ReplayService      *ReplayService
+	APIAuthenticator   api.Authenticator
+	APIKeyManager      api.KeyManager
 
 	db                   *sql.DB
 	issueRepository      *repository.IssueRepository
@@ -45,6 +48,7 @@ type Container struct {
 	exportRepository     *repository.ExportRepository
 	crawlRepository      *repository.CrawlRepository
 	dashboardRepository  *repository.DashboardRepository
+	apiKeyRepository     *repository.APIKeyRepository
 }
 
 func (c *Container) Ready(ctx context.Context) error {
@@ -60,6 +64,7 @@ func NewContainer(configFile string) *Container {
 	c.InitDB()
 	c.InitArchiveService()
 	c.InitRepositories()
+	c.InitAPIServices()
 	c.InitPubSubBroker()
 	c.InitIssueService()
 	c.InitReportService()
@@ -119,9 +124,14 @@ func (c *Container) InitRepositories() {
 	c.exportRepository = &repository.ExportRepository{DB: c.db}
 	c.crawlRepository = &repository.CrawlRepository{DB: c.db}
 	c.dashboardRepository = &repository.DashboardRepository{DB: c.db}
+	c.apiKeyRepository = &repository.APIKeyRepository{DB: c.db}
 
 	// Clean up unfinished crawls.
 	c.crawlRepository.DeleteUnfinishedCrawls()
+}
+
+func (c *Container) InitAPIServices() {
+	c.APIAuthenticator, c.APIKeyManager = NewAPIServices(c.Config.API, c.apiKeyRepository)
 }
 
 // Create the PubSub broker.
