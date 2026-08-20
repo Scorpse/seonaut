@@ -32,11 +32,13 @@ pwsh ./scripts/api-smoke.ps1
 The script starts MySQL, a controlled fixture site, and a fixture-tagged fork image. It then verifies:
 
 - tenant/platform bootstrap and two independent tenant keys;
-- deterministic fixture crawl with JSON findings and CSV/XML exports;
+- deterministic fixture crawl with exact `23/6/4/3` issue/page/link/resource counts, URL/code/value multisets, CSV rows, and sitemap locations;
 - page, issue, link, and resource counts against the same upstream tables used by the UI repositories;
 - negative isolation across project/crawl lists, direct IDs, cursors, and exports, with equivalent `404` semantics;
 - `/api/v1/meta` matches OCI fork revision, upstream revision, and schema labels;
-- a pre-rollback MySQL snapshot is created, the fork stops, and `ghcr.io/stjudewashere/seonaut@sha256:77826fb91f1f7b3d054bcd73c4f9df40c6b40962cfab68208f435e0758266415` boots against the additive schema while existing projects and completed crawls remain readable.
+- a pre-rollback MySQL snapshot is created, the fork stops, and `ghcr.io/stjudewashere/seonaut@sha256:77826fb91f1f7b3d054bcd73c4f9df40c6b40962cfab68208f435e0758266415` boots against the additive schema while an authenticated upstream UI session renders the retained project and completed-crawl dashboard.
+
+For that final UI check only, the disposable database receives a known password for one API-only fixture owner after the rollback snapshot is taken. No credential or UI-access mutation is included in the snapshot or used outside the isolated smoke stack.
 
 Useful switches:
 

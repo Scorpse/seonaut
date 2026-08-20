@@ -76,6 +76,26 @@ function Assert-Status {
     }
 }
 
+function Assert-Multiset {
+    param(
+        [Parameter(Mandatory)][object[]]$Actual,
+        [Parameter(Mandatory)][object[]]$Expected,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $actualValues = @($Actual | ForEach-Object { [string]$_ } | Sort-Object)
+    $expectedValues = @($Expected | ForEach-Object { [string]$_ } | Sort-Object)
+    if (($actualValues -join "`n") -ne ($expectedValues -join "`n")) {
+        throw "$Name differed from the controlled fixture.`nExpected:`n$($expectedValues -join "`n")`nActual:`n$($actualValues -join "`n")"
+    }
+}
+
+function Get-OptionalField {
+    param([Parameter(Mandatory)][object]$Object, [Parameter(Mandatory)][string]$Name)
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return "" }
+    return [string]$property.Value
+}
+
 function Get-DatabaseScalar {
     param([Parameter(Mandatory)][string]$Sql)
     $output = Invoke-Docker ($compose + @("exec", "-T", "-e", "MYSQL_PWD=seonaut-smoke", "db", "mysql", "-N", "-B", "-useonaut", "seonaut", "-e", $Sql))
@@ -106,7 +126,7 @@ try {
     $image = "kilnbench/seonaut-campanix:$forkRevision"
 
     if (-not $ReuseStack) {
-        Invoke-Docker ($compose + @("down", "--volumes", "--remove-orphans")) | Out-Null
+        Invoke-Docker ($compose + @("--profile", "rollback", "down", "--volumes", "--remove-orphans")) | Out-Null
         $up = @("up", "-d")
         if (-not $SkipBuild) { $up += "--build" }
         $up += @("db", "fixture", "app")
@@ -162,11 +182,65 @@ try {
         Assert-Status $response @(200) "$kind findings"
         $results[$kind] = @($response.Json.data)
     }
-    if ($results.pages.Count -lt 2 -or $results.links.Count -lt 2 -or $results.resources.Count -lt 3 -or $results.issues.Count -lt 1) {
-        throw "Fixture coverage is too small: issues=$($results.issues.Count), pages=$($results.pages.Count), links=$($results.links.Count), resources=$($results.resources.Count)"
+    $expectedCounts = @{ issues = 23; pages = 6; links = 4; resources = 3 }
+    foreach ($kind in $expectedCounts.Keys) {
+        if ($results[$kind].Count -ne $expectedCounts[$kind]) {
+            throw "$kind fixture count was $($results[$kind].Count), expected $($expectedCounts[$kind])"
+        }
     }
 
+    $expectedIssues = @(
+        "http://fixture/|ERROR_CONTENT_TYPE_OPTIONS|warning",
+        "http://fixture/|ERROR_HTTP_LINKS|alert",
+        "http://fixture/|ERROR_LITTLE_CONTENT|warning",
+        "http://fixture/|ERROR_MISSING_CSP|warning",
+        "http://fixture/|ERROR_MISSING_HSTS|warning",
+        "http://fixture/|ERROR_SHORT_DESCRIPTION|alert",
+        "http://fixture/|HTTP_SCHEME|critical",
+        "http://fixture/about.html|ERROR_CONTENT_TYPE_OPTIONS|warning",
+        "http://fixture/about.html|ERROR_MISSING_CSP|warning",
+        "http://fixture/about.html|ERROR_MISSING_HSTS|warning",
+        "http://fixture/app.js|ERROR_MISSING_HSTS|warning",
+        "http://fixture/app.js|HTTP_SCHEME|critical",
+        "http://fixture/missing.html|ERROR_40x|critical",
+        "http://fixture/missing.html|ERROR_CONTENT_TYPE_OPTIONS|warning",
+        "http://fixture/missing.html|ERROR_MISSING_CSP|warning",
+        "http://fixture/missing.html|ERROR_MISSING_HSTS|warning",
+        "http://fixture/missing.html|ERROR_MISSING_VIEWPORT|warning",
+        "http://fixture/missing.html|ERROR_NO_LANG|warning",
+        "http://fixture/missing.html|ERROR_SHORT_TITLE|alert",
+        "http://fixture/pixel.svg|ERROR_MISSING_HSTS|warning",
+        "http://fixture/pixel.svg|HTTP_SCHEME|critical",
+        "http://fixture/site.css|ERROR_MISSING_HSTS|warning",
+        "http://fixture/site.css|HTTP_SCHEME|critical"
+    )
+    Assert-Multiset @($results.issues | ForEach-Object { "$($_.page_url)|$($_.code)|$($_.severity)" }) $expectedIssues "JSON issue URL/code/severity multiset"
+
+    $expectedPages = @(
+        "http://fixture/|200|text/html|en|Kilnbench fixture home||true|true",
+        "http://fixture/about.html|200|text/html|en||index,nofollow|false|true",
+        "http://fixture/app.js|200|application/javascript||||true|false",
+        "http://fixture/missing.html|404|text/html||404 Not Found||true|false",
+        "http://fixture/pixel.svg|200|image/svg+xml||||true|false",
+        "http://fixture/site.css|200|text/css||||true|false"
+    )
+    Assert-Multiset @($results.pages | ForEach-Object { "$($_.url)|$($_.status_code)|$(Get-OptionalField $_ 'content_type')|$(Get-OptionalField $_ 'language')|$(Get-OptionalField $_ 'title')|$(Get-OptionalField $_ 'robots')|$(([string]$_.crawled).ToLowerInvariant())|$(([string]$_.in_sitemap).ToLowerInvariant())" }) $expectedPages "JSON page multiset"
+    $expectedLinks = @(
+        "external|http://fixture/|https://example.com/|External reference|nofollow|true",
+        "internal|http://fixture/|http://fixture/about.html|About||false",
+        "internal|http://fixture/|http://fixture/missing.html|Missing page||false",
+        "internal|http://fixture/about.html|http://fixture/|Home||false"
+    )
+    Assert-Multiset @($results.links | ForEach-Object { "$($_.kind)|$($_.origin_url)|$($_.destination_url)|$(Get-OptionalField $_ 'text')|$(Get-OptionalField $_ 'rel')|$(([string]$_.nofollow).ToLowerInvariant())" }) $expectedLinks "JSON link multiset"
+    $expectedResources = @(
+        "image|http://fixture/|http://fixture/pixel.svg|Fixture pixel|",
+        "script|http://fixture/|http://fixture/app.js||",
+        "style|http://fixture/|http://fixture/site.css||"
+    )
+    Assert-Multiset @($results.resources | ForEach-Object { "$($_.type)|$($_.origin_url)|$($_.url)|$(Get-OptionalField $_ 'alt')|$(Get-OptionalField $_ 'poster')" }) $expectedResources "JSON resource multiset"
+
     $upstreamCrawl = Get-DatabaseScalar "SELECT upstream_crawl_id FROM api_crawls WHERE id='$crawlA';"
+    $upstreamProject = Get-DatabaseScalar "SELECT upstream_project_id FROM api_projects WHERE id='$projectA';"
     $databaseCounts = @{
         pages = [int](Get-DatabaseScalar "SELECT COUNT(*) FROM pagereports WHERE crawl_id=$upstreamCrawl;")
         links = [int](Get-DatabaseScalar "SELECT (SELECT COUNT(*) FROM links WHERE crawl_id=$upstreamCrawl)+(SELECT COUNT(*) FROM external_links WHERE crawl_id=$upstreamCrawl);")
@@ -179,11 +253,50 @@ try {
         }
     }
 
+    $exports = @{}
     foreach ($export in @("issues.csv", "pages.csv", "resources.csv", "sitemap.xml")) {
         $response = Invoke-SmokeRequest "GET" "/api/v1/projects/$projectA/crawls/$crawlA/exports/$export" $tenantAKey $null
         Assert-Status $response @(200) "$export export"
         if ([string]::IsNullOrWhiteSpace($response.Content)) { throw "$export export was empty" }
+        $exports[$export] = $response.Content
     }
+
+    $issueLabels = @{
+        ERROR_40x = "URLs returning status code 40x"
+        ERROR_CONTENT_TYPE_OPTIONS = "Missing content type options"
+        ERROR_HTTP_LINKS = "HTTPS URLs with links to HTTP URLs"
+        ERROR_LITTLE_CONTENT = "Pages with little content"
+        ERROR_MISSING_CSP = "Missing content security policy"
+        ERROR_MISSING_HSTS = "Missing HSTS header"
+        ERROR_MISSING_VIEWPORT = "Pages missing the viewport meta tag"
+        ERROR_NO_LANG = "Pages missing the language attribute"
+        ERROR_SHORT_DESCRIPTION = "Pages with short meta description"
+        ERROR_SHORT_TITLE = "Pages with short title"
+        HTTP_SCHEME = "Pages using the HTTP scheme"
+    }
+    $priorityLabels = @{ critical = "Critical"; alert = "Alert"; warning = "Warning" }
+    $expectedIssueCSV = @($expectedIssues | ForEach-Object {
+        $parts = $_ -split '\|', 3
+        "$($parts[0])|$($issueLabels[$parts[1]])|$($priorityLabels[$parts[2]])"
+    })
+    $issueCSVRows = @($exports["issues.csv"] | ConvertFrom-Csv)
+    Assert-Multiset @($issueCSVRows | ForEach-Object { "$($_.URL)|$($_.'Issue Type')|$($_.Priority)" }) $expectedIssueCSV "issues.csv rows"
+
+    $pageCSVRows = @($exports["pages.csv"] | ConvertFrom-Csv)
+    $expectedPageCSV = @(
+        "http://fixture/|200|text/html|en|Kilnbench fixture home|",
+        "http://fixture/about.html|200|text/html|en||index,nofollow",
+        "http://fixture/app.js|200|application/javascript|||",
+        "http://fixture/missing.html|404|text/html||404 Not Found|",
+        "http://fixture/pixel.svg|200|image/svg+xml|||",
+        "http://fixture/site.css|200|text/css|||"
+    )
+    Assert-Multiset @($pageCSVRows | ForEach-Object { "$($_.URL)|$($_.'Status Code')|$($_.'Content Type')|$($_.Lang)|$($_.Title)|$($_.Robots)" }) $expectedPageCSV "pages.csv stable columns"
+
+    $resourceCSVRows = @($exports["resources.csv"] | ConvertFrom-Csv)
+    Assert-Multiset @($resourceCSVRows | ForEach-Object { "$($_.Type)|$($_.Origin)|$($_.URL)|$($_.Alt)|$($_.Poster)" }) $expectedResources "resources.csv rows"
+    $sitemapLocations = @([regex]::Matches($exports["sitemap.xml"], '<loc>([^<]+)</loc>') | ForEach-Object { $_.Groups[1].Value })
+    Assert-Multiset $sitemapLocations @("http://fixture/") "sitemap.xml locations"
 
     $tenantBList = Invoke-SmokeRequest "GET" "/api/v1/projects" $tenantBKey $null
     Assert-Status $tenantBList @(200) "tenant-b project list"
@@ -205,6 +318,12 @@ try {
         $probe = Invoke-SmokeRequest "GET" $path $tenantBKey $null
         Assert-Status $probe @(404) "foreign isolation probe $path"
     }
+    $tenantACursorResponse = Invoke-SmokeRequest "GET" "/api/v1/projects/$projectA/crawls/$crawlA/issues?limit=1" $tenantAKey $null
+    Assert-Status $tenantACursorResponse @(200) "tenant-a cursor source"
+    $tenantACursor = [string]$tenantACursorResponse.Json.page.next_cursor
+    if ([string]::IsNullOrWhiteSpace($tenantACursor)) { throw "tenant-a cursor source returned no next cursor" }
+    $cursorTransplant = Invoke-SmokeRequest "GET" "/api/v1/projects/$projectB/crawls/$crawlA/issues?cursor=$tenantACursor" $tenantBKey $null
+    Assert-Status $cursorTransplant @(404) "foreign valid-cursor transplant"
     $timingDelta = [math]::Abs($foreignProject.Milliseconds - $missingProject.Milliseconds)
     if ($timingDelta -gt 1000) { throw "Foreign/missing 404 timing delta was unexpectedly high: ${timingDelta}ms" }
 
@@ -220,6 +339,16 @@ try {
         $crawlCountBefore = [int](Get-DatabaseScalar "SELECT COUNT(*) FROM crawls WHERE end IS NOT NULL;")
         if ($projectCountBefore -lt 2 -or $crawlCountBefore -lt 1) { throw "Rollback fixture has no durable project/crawl data" }
         Invoke-Docker ($compose + @("exec", "-T", "-e", "MYSQL_PWD=root-smoke", "db", "sh", "-c", "mysqldump -uroot --single-transaction seonaut > /tmp/pre-rollback.sql")) | Out-Null
+
+        $rollbackFixtureEmail = "rollback-check@example.invalid"
+        $rollbackPassword = "rollback-smoke-password"
+        $signup = Invoke-WebRequest -Method POST -Uri "$BaseUrl/signup" -Body @{ email = $rollbackFixtureEmail; password = $rollbackPassword } -WebSession (New-Object Microsoft.PowerShell.Commands.WebRequestSession) -SkipHttpErrorCheck
+        if ([int]$signup.StatusCode -ne 200) { throw "Could not create the disposable rollback login fixture" }
+        $rollbackEmail = Get-DatabaseScalar "SELECT service_email FROM api_tenants WHERE external_tenant_id='tenant-a' LIMIT 1;"
+        $rollbackUserPrepared = [int](Get-DatabaseScalar "UPDATE users service_user JOIN users fixture_user ON fixture_user.email='$rollbackFixtureEmail' SET service_user.password=fixture_user.password, service_user.api_only=0 WHERE service_user.email='$rollbackEmail'; SELECT ROW_COUNT();")
+        if ($rollbackUserPrepared -ne 1) { throw "Could not prepare the tenant-a user for upstream UI compatibility verification" }
+        Get-DatabaseScalar "DELETE FROM users WHERE email='$rollbackFixtureEmail'; SELECT ROW_COUNT();" | Out-Null
+
         Invoke-Docker ($compose + @("stop", "app")) | Out-Null
         Invoke-Docker ($compose + @("--profile", "rollback", "up", "-d", "rollback")) | Out-Null
         Wait-ForUrl "$RollbackUrl/signin"
@@ -228,13 +357,24 @@ try {
         $projectCountAfter = [int](Get-DatabaseScalar "SELECT COUNT(*) FROM projects WHERE id IS NOT NULL AND url <> ''; ")
         $crawlCountAfter = [int](Get-DatabaseScalar "SELECT COUNT(*) FROM crawls WHERE end IS NOT NULL AND project_id IS NOT NULL;")
         if ($projectCountAfter -ne $projectCountBefore -or $crawlCountAfter -ne $crawlCountBefore) { throw "Pinned upstream rollback could not read the existing projects/crawls" }
+        $rollbackSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+        $login = Invoke-WebRequest -Method POST -Uri "$RollbackUrl/signin" -Body @{ email = $rollbackEmail; password = $rollbackPassword } -WebSession $rollbackSession -SkipHttpErrorCheck
+        if ([int]$login.StatusCode -ne 200) { throw "Pinned upstream rollback login failed" }
+        $rollbackHome = Invoke-WebRequest -Uri "$RollbackUrl/" -WebSession $rollbackSession -SkipHttpErrorCheck
+        if ([int]$rollbackHome.StatusCode -ne 200 -or $rollbackHome.Content -notmatch [regex]::Escape("http://fixture/") -or $rollbackHome.Content -notmatch [regex]::Escape("/dashboard?pid=$upstreamProject")) {
+            throw "Pinned upstream UI did not render the retained project and completed crawl"
+        }
+        $rollbackDashboard = Invoke-WebRequest -Uri "$RollbackUrl/dashboard?pid=$upstreamProject" -WebSession $rollbackSession -SkipHttpErrorCheck
+        if ([int]$rollbackDashboard.StatusCode -ne 200 -or $rollbackDashboard.BaseResponse.RequestMessage.RequestUri.AbsolutePath -ne "/dashboard" -or $rollbackDashboard.Content -notmatch [regex]::Escape("6 URLs crawled")) {
+            throw "Pinned upstream dashboard could not read the retained crawl"
+        }
     }
 
     Write-Host "PASS: provenance, fixture accuracy, two-tenant isolation, exports, and rollback compatibility"
     Write-Host "Counts: issues=$($results.issues.Count) pages=$($results.pages.Count) links=$($results.links.Count) resources=$($results.resources.Count)"
 } finally {
     if (-not $KeepStack) {
-        try { Invoke-Docker ($compose + @("down", "--volumes", "--remove-orphans")) | Out-Null } catch { Write-Warning $_ }
+        try { Invoke-Docker ($compose + @("--profile", "rollback", "down", "--volumes", "--remove-orphans")) | Out-Null } catch { Write-Warning $_ }
     }
     Pop-Location
 }
