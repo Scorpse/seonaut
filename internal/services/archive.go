@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,6 +29,50 @@ func NewArchiveService(ad string) *ArchiveService {
 // It returns an error if the archiver couldn't be created.
 func (s *ArchiveService) GetArchiveWriter(p *models.Project) (*archiver.Writer, error) {
 	return archiver.NewArchiver(s.getArchiveFile(p))
+}
+
+func (s *ArchiveService) GetAPIArchiveWriter(p *models.Project, crawlID string) (*archiver.Writer, func() error, error) {
+	file, err := s.getAPIArchiveFile(p, crawlID)
+	if err != nil {
+		return nil, nil, err
+	}
+	partial := file + ".partial"
+	writer, err := archiver.NewArchiver(partial)
+	if err != nil {
+		return nil, nil, err
+	}
+	publish := func() error { return os.Rename(partial, file) }
+	return writer, publish, nil
+}
+
+func (s *ArchiveService) GetAPIArchiveFilePath(p *models.Project, crawlID string) (string, error) {
+	file, err := s.getAPIArchiveFile(p, crawlID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(file); err != nil {
+		return "", err
+	}
+	return file, nil
+}
+
+func (s *ArchiveService) DeleteAPIArchive(crawlID string) error {
+	if crawlID == "" || filepath.Base(crawlID) != crawlID {
+		return errors.New("invalid API crawl ID")
+	}
+	root, err := filepath.Abs(filepath.Join(s.ArchiveDir, "api"))
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(filepath.Join(root, crawlID))
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative != crawlID {
+		return errors.New("invalid API archive path")
+	}
+	return os.RemoveAll(target)
 }
 
 // ReadArchive reads an URLs WACZ record from a project's archive.
@@ -128,5 +173,23 @@ func (s *ArchiveService) GetArchiveFilePath(p *models.Project) (string, error) {
 
 // getArchiveFile returns a string with the path to the project's WACZ file.
 func (s *ArchiveService) getArchiveFile(p *models.Project) string {
-	return s.ArchiveDir + "/" + strconv.FormatInt(p.Id, 10) + "/" + p.Host + ".wacz"
+	return s.ArchiveDir + "/" + strconv.FormatInt(p.Id, 10) + "/" + archiveHost(p) + ".wacz"
+}
+
+func (s *ArchiveService) getAPIArchiveFile(p *models.Project, crawlID string) (string, error) {
+	if crawlID == "" || filepath.Base(crawlID) != crawlID {
+		return "", errors.New("invalid API crawl ID")
+	}
+	return filepath.Join(s.ArchiveDir, "api", crawlID, archiveHost(p)+".wacz"), nil
+}
+
+func archiveHost(project *models.Project) string {
+	if project.Host != "" {
+		return project.Host
+	}
+	parsed, err := url.Parse(project.URL)
+	if err == nil && parsed.Hostname() != "" {
+		return parsed.Hostname()
+	}
+	return "crawl"
 }

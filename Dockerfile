@@ -2,6 +2,12 @@
 # builder https://docs.docker.com/build/buildkit/dockerfile-release-notes/
 FROM golang:1.25-alpine3.22 AS builder
 
+ARG FORK_VERSION=dev
+ARG FORK_REVISION=unknown
+ARG UPSTREAM_REVISION=880b312c28fab8b0bf7fe4f9449dc4746dbb82ff
+ARG SCHEMA_VERSION=80
+ARG GO_BUILD_TAGS=""
+
 RUN mkdir /app
 COPY . /app
 WORKDIR /app
@@ -10,7 +16,10 @@ WORKDIR /app
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux \
-    go build -o seonaut cmd/server/main.go
+    go build \
+	-tags "${GO_BUILD_TAGS}" \
+    -ldflags "-X github.com/stjudewashere/seonaut/internal/buildinfo.ForkVersion=${FORK_VERSION} -X github.com/stjudewashere/seonaut/internal/buildinfo.ForkRevision=${FORK_REVISION} -X github.com/stjudewashere/seonaut/internal/buildinfo.UpstreamRevision=${UPSTREAM_REVISION} -X github.com/stjudewashere/seonaut/internal/buildinfo.SchemaVersion=${SCHEMA_VERSION}" \
+    -o seonaut cmd/server/main.go
 
 FROM node:18-alpine3.18 AS front
 
@@ -28,6 +37,20 @@ RUN --mount=type=cache,target=/root/.npm \
 	--loader:.woff2=file
 
 FROM alpine:latest AS production
+
+ARG FORK_SOURCE=https://github.com/Scorpse/seonaut
+ARG FORK_VERSION=dev
+ARG FORK_REVISION=unknown
+ARG UPSTREAM_REPOSITORY=https://github.com/stjudewashere/seonaut
+ARG UPSTREAM_REVISION=880b312c28fab8b0bf7fe4f9449dc4746dbb82ff
+ARG SCHEMA_VERSION=80
+
+LABEL org.opencontainers.image.source=$FORK_SOURCE \
+      org.opencontainers.image.revision=$FORK_REVISION \
+      org.opencontainers.image.version=$FORK_VERSION \
+      io.kilnbench.seonaut.upstream.repository=$UPSTREAM_REPOSITORY \
+      io.kilnbench.seonaut.upstream.revision=$UPSTREAM_REVISION \
+      io.kilnbench.seonaut.schema.version=$SCHEMA_VERSION
 
 COPY --from=builder /app/seonaut /app/seonaut
 COPY --from=front /home/node/app /app/

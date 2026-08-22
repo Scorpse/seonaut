@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/stjudewashere/seonaut/internal/api"
+	"github.com/stjudewashere/seonaut/internal/buildinfo"
 	"github.com/stjudewashere/seonaut/internal/models"
 	"github.com/stjudewashere/seonaut/internal/services"
 )
@@ -21,6 +23,22 @@ type PageView struct {
 
 // NewServer sets up the HTTP server routes and starts the HTTP server.
 func NewServer(container *services.Container) {
+	registerAPIRoutes(http.DefaultServeMux, api.Dependencies{
+		Ready:        container.Ready,
+		Authenticate: container.APIAuthenticator.Authenticate,
+		Build:        buildinfo.Current(),
+		PlatformKeys: container.APIKeyManager,
+		Tenants:      container.APITenantManager,
+		Projects:     container.APIProjectManager,
+		Crawls:       container.APICrawlManager,
+		Findings:     container.APIFindings,
+		CursorSecret: []byte(container.Config.API.CursorSecret),
+		Exports:      container.APIExports,
+		RateLimiter:  container.APIRateLimiter,
+		Audit:        container.APIAudit,
+		ExportSlots:  container.APIExportSlots,
+	})
+
 	// Handle static files
 	fileServer := http.FileServer(http.Dir("./web/static"))
 	http.Handle("GET /resources/", http.StripPrefix("/resources", fileServer))
@@ -98,4 +116,8 @@ func NewServer(container *services.Container) {
 	if err != nil {
 		log.Fatalf("error starting server: %v", err)
 	}
+}
+
+func registerAPIRoutes(mux *http.ServeMux, deps api.Dependencies) {
+	api.RegisterRoutes(mux, deps)
 }

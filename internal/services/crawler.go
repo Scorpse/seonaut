@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stjudewashere/seonaut/internal/archiver"
 	"github.com/stjudewashere/seonaut/internal/config"
 	"github.com/stjudewashere/seonaut/internal/crawler"
 	"github.com/stjudewashere/seonaut/internal/models"
@@ -25,41 +26,49 @@ type CrawlerServiceRepository interface {
 	SaveCrawl(models.Project) (*models.Crawl, error)
 	GetLastCrawl(p *models.Project) models.Crawl
 	GetLastCrawls(models.Project, int) []models.Crawl
-	DeleteCrawlData(c *models.Crawl)
+	DeleteCrawlDataIfUnreferenced(c *models.Crawl)
 
 	CountIssuesByPriority(int64, int) int
-	UpdateCrawl(*models.Crawl)
+	UpdateCrawl(*models.Crawl) error
 }
 
 type CrawlerServicesContainer struct {
-	Broker         *Broker
-	ReportManager  *ReportManager
-	CrawlerHandler *CrawlerHandler
-	ArchiveService *ArchiveService
-	Config         *config.CrawlerConfig
+	Broker          *Broker
+	ReportManager   *ReportManager
+	CrawlerHandler  *CrawlerHandler
+	ArchiveService  *ArchiveService
+	Config          *config.CrawlerConfig
+	TargetValidator crawler.TargetValidator
+	Transport       http.RoundTripper
 }
 
 type CrawlerService struct {
-	repository     CrawlerServiceRepository
-	config         *config.CrawlerConfig
-	broker         *Broker
-	reportManager  *ReportManager
-	crawlerHandler *CrawlerHandler
-	ArchiveService *ArchiveService
-	crawlers       map[int64]*crawler.Crawler
-	lock           *sync.RWMutex
+	repository      CrawlerServiceRepository
+	config          *config.CrawlerConfig
+	broker          *Broker
+	reportManager   *ReportManager
+	crawlerHandler  *CrawlerHandler
+	ArchiveService  *ArchiveService
+	targetValidator crawler.TargetValidator
+	transport       http.RoundTripper
+	crawlers        map[int64]*crawler.Crawler
+	canceled        map[int64]bool
+	lock            *sync.RWMutex
 }
 
 func NewCrawlerService(r CrawlerServiceRepository, s CrawlerServicesContainer) *CrawlerService {
 	return &CrawlerService{
-		repository:     r,
-		broker:         s.Broker,
-		config:         s.Config,
-		reportManager:  s.ReportManager,
-		crawlerHandler: s.CrawlerHandler,
-		ArchiveService: s.ArchiveService,
-		crawlers:       make(map[int64]*crawler.Crawler),
-		lock:           &sync.RWMutex{},
+		repository:      r,
+		broker:          s.Broker,
+		config:          s.Config,
+		reportManager:   s.ReportManager,
+		crawlerHandler:  s.CrawlerHandler,
+		ArchiveService:  s.ArchiveService,
+		targetValidator: s.TargetValidator,
+		transport:       s.Transport,
+		crawlers:        make(map[int64]*crawler.Crawler),
+		canceled:        make(map[int64]bool),
+		lock:            &sync.RWMutex{},
 	}
 }
 
@@ -68,9 +77,20 @@ func NewCrawlerService(r CrawlerServiceRepository, s CrawlerServicesContainer) *
 // running or if there's an error creating it.
 // Finally the previous crawl's data is removed and the crawl is returned.
 func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) error {
+	_, err := s.startCrawlerObserved(p, b, "", nil, false)
+	return err
+}
+
+// StartCrawlerObserved preserves completed crawl data for API callers while
+// exposing the upstream crawl ID and one terminal callback.
+func (s *CrawlerService) StartCrawlerObserved(p models.Project, b models.BasicAuth, archiveID string, completed func(*models.Crawl, bool, bool, error)) (*models.Crawl, error) {
+	return s.startCrawlerObserved(p, b, archiveID, completed, true)
+}
+
+func (s *CrawlerService) startCrawlerObserved(p models.Project, b models.BasicAuth, archiveID string, completed func(*models.Crawl, bool, bool, error), strictTargets bool) (*models.Crawl, error) {
 	u, err := url.Parse(p.URL)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if u.Path == "" {
@@ -80,9 +100,9 @@ func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) erro
 	// Acquire the in-memory lock before any DB writes so that a rejected
 	// duplicate trigger cannot leave an orphaned crawl record with a NULL
 	// end timestamp.
-	c, err := s.addCrawler(u, &p, &b)
+	c, err := s.addCrawler(u, &p, &b, strictTargets)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	previousCrawl := s.repository.GetLastCrawl(&p)
@@ -90,22 +110,57 @@ func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) erro
 	crawl, err := s.repository.SaveCrawl(p)
 	if err != nil {
 		s.removeCrawler(&p)
-		return err
+		return nil, err
 	}
 
 	go func() {
-		defer s.removeCrawler(&p)
-		defer s.repository.DeleteCrawlData(&previousCrawl)
+		var runErr error
+		archiveReady := false
+		var closeArchive func() error
+		defer func() {
+			defer s.removeCrawler(&p)
+			if recovered := recover(); recovered != nil {
+				runErr = fmt.Errorf("crawler panic: %v", recovered)
+				log.Printf("Crawler for %s failed: %v", p.URL, runErr)
+			}
+			if closeArchive != nil {
+				if err := closeArchive(); err != nil {
+					log.Printf("Failed to finalize archive for %s: %v", p.URL, err)
+				} else {
+					archiveReady = true
+				}
+			}
+			canceled := s.crawlerCanceled(&p)
+			if completed != nil {
+				completed(crawl, canceled, archiveReady, runErr)
+			}
+		}()
+		defer s.repository.DeleteCrawlDataIfUnreferenced(&previousCrawl)
 
 		callback := s.crawlerHandler.responseCallback(crawl, &p, c)
 
 		if p.Archive {
-			archiver, err := s.ArchiveService.GetArchiveWriter(&p)
+			var archiveWriter *archiver.Writer
+			var publishArchive func() error
+			var err error
+			if archiveID != "" {
+				archiveWriter, publishArchive, err = s.ArchiveService.GetAPIArchiveWriter(&p, archiveID)
+			} else {
+				archiveWriter, err = s.ArchiveService.GetArchiveWriter(&p)
+			}
 			if err != nil {
 				log.Printf("Failed to create archive: %v", err)
 			} else {
-				defer archiver.Close()
-				callback = s.crawlerHandler.archiveWrapper(callback, archiver)
+				closeArchive = func() error {
+					if err := archiveWriter.Close(); err != nil {
+						return err
+					}
+					if publishArchive != nil {
+						return publishArchive()
+					}
+					return nil
+				}
+				callback = s.crawlerHandler.archiveWrapper(callback, archiveWriter)
 			}
 		}
 
@@ -132,12 +187,15 @@ func (s *CrawlerService) StartCrawler(p models.Project, b models.BasicAuth) erro
 		crawl.WarningIssues = s.repository.CountIssuesByPriority(crawl.Id, Warning)
 		crawl.TotalIssues = crawl.CriticalIssues + crawl.AlertIssues + crawl.WarningIssues
 
-		s.repository.UpdateCrawl(crawl)
+		runErr = s.repository.UpdateCrawl(crawl)
+		if runErr != nil {
+			log.Printf("Persist crawl %d: %v", crawl.Id, runErr)
+		}
 		s.broker.Publish(fmt.Sprintf("crawl-%d", p.Id), &models.Message{Name: "CrawlEnd", Data: crawl.TotalURLs})
 		log.Printf("Crawled %d urls in %s", crawl.TotalURLs, p.URL)
 	}()
 
-	return nil
+	return crawl, nil
 }
 
 // Get a slice with 'LastCrawlsLimit' number of the crawls
@@ -161,13 +219,14 @@ func (s *CrawlerService) StopCrawler(p models.Project) {
 		return
 	}
 
+	s.canceled[p.Id] = true
 	crawler.Stop()
 }
 
 // AddCrawler creates a new project crawler and adds it to the crawlers map. It returns the crawler
 // on success otherwise it returns an error indicating the crawler already exists or there was an
 // error creating it.
-func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.BasicAuth) (*crawler.Crawler, error) {
+func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.BasicAuth, strictTargets bool) (*crawler.Crawler, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -192,6 +251,13 @@ func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.Bas
 			return http.ErrUseLastResponse
 		},
 	}
+	var targetValidator crawler.TargetValidator
+	var maxResponseBytes int64
+	if strictTargets {
+		httpClient.Transport = s.transport
+		targetValidator = s.targetValidator
+		maxResponseBytes = maxBodySize
+	}
 
 	// Make sure the user agent is not empty
 	if p.UserAgent == "" {
@@ -203,10 +269,13 @@ func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.Bas
 		BasicAuthDomains: []string{mainDomain, "www." + mainDomain},
 		AuthUser:         b.AuthUser,
 		AuthPass:         b.AuthPass,
+		TargetValidator:  targetValidator,
+		MaxResponseBytes: maxResponseBytes,
 	}, httpClient)
 
 	// Creates a new crawler with the crawler's response handler.
 	s.crawlers[p.Id] = crawler.NewCrawler(u, options, client)
+	s.canceled[p.Id] = false
 
 	return s.crawlers[p.Id], nil
 }
@@ -217,4 +286,11 @@ func (s *CrawlerService) removeCrawler(p *models.Project) {
 	defer s.lock.Unlock()
 
 	delete(s.crawlers, p.Id)
+	delete(s.canceled, p.Id)
+}
+
+func (s *CrawlerService) crawlerCanceled(p *models.Project) bool {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return s.canceled[p.Id]
 }

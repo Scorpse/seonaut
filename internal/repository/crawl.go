@@ -17,7 +17,10 @@ type CrawlRepository struct {
 // SaveCrawl inserts a new crawl into the database and returns a new Crawl model with
 // the data provided by the project.
 func (ds *CrawlRepository) SaveCrawl(p models.Project) (*models.Crawl, error) {
-	stmt, _ := ds.DB.Prepare("INSERT INTO crawls (project_id) VALUES (?)")
+	stmt, err := ds.DB.Prepare("INSERT INTO crawls (project_id) VALUES (?)")
+	if err != nil {
+		return nil, err
+	}
 	defer stmt.Close()
 	res, err := stmt.Exec(p.Id)
 
@@ -196,6 +199,23 @@ func (ds *CrawlRepository) DeleteCrawlData(crawl *models.Crawl) {
 	deleteFunc(crawl.Id, "pagereports")
 }
 
+// DeleteCrawlDataIfUnreferenced retains durable API crawl results while
+// preserving the UI cleanup policy for unowned crawl data.
+func (ds *CrawlRepository) DeleteCrawlDataIfUnreferenced(crawl *models.Crawl) {
+	if crawl == nil || crawl.Id == 0 {
+		return
+	}
+	var referenced bool
+	if err := ds.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM api_crawls WHERE upstream_crawl_id = ?)`, crawl.Id).Scan(&referenced); err != nil {
+		log.Printf("DeleteCrawlDataIfUnreferenced: cid %d: %v\n", crawl.Id, err)
+		return
+	}
+	if referenced {
+		return
+	}
+	ds.DeleteCrawlData(crawl)
+}
+
 // DeleteProjectCrawls deletes all of the project's crawls and associated data.
 func (ds *CrawlRepository) DeleteProjectCrawls(p *models.Project) {
 	query := `
@@ -235,6 +255,9 @@ func (ds *CrawlRepository) DeleteUnfinishedCrawls() {
 			crawls.id
 		FROM crawls
 		WHERE crawls.issues_end IS NULL
+		AND NOT EXISTS (
+			SELECT 1 FROM api_crawls WHERE api_crawls.upstream_crawl_id = crawls.id
+		)
 	`
 	count := 0
 
@@ -276,7 +299,7 @@ func (ds *CrawlRepository) DeleteUnfinishedCrawls() {
 
 // SaveIssuesCount stores the total number of issues as well as the total issues by priority for
 // the crawl specified in the "crawlId" parameter.
-func (ds *CrawlRepository) UpdateCrawl(crawl *models.Crawl) {
+func (ds *CrawlRepository) UpdateCrawl(crawl *models.Crawl) error {
 	query := `UPDATE
 		crawls
 		SET 
@@ -325,4 +348,5 @@ func (ds *CrawlRepository) UpdateCrawl(crawl *models.Crawl) {
 	if err != nil {
 		log.Printf("SaveIssuesCount: %v\n", err)
 	}
+	return err
 }

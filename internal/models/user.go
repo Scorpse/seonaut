@@ -6,4 +6,5 @@ type User struct {
 	Password string
 	Lang     string
 	Theme    string
+	APIOnly  bool
 }

@@ -55,6 +55,7 @@ func (sc *SitemapChecker) ParseSitemaps(URLs []string, callback func(u string)) 
 			// Each sitemap is parsed in its own Go routine
 			// If the sitemap limit is hit the parser function returns an error to stop the process
 			go func(s string) {
+				defer wg.Done()
 				resp, err := sc.client.Get(s)
 				if err != nil {
 					return
@@ -74,8 +75,6 @@ func (sc *SitemapChecker) ParseSitemaps(URLs []string, callback func(u string)) 
 
 					return nil
 				})
-
-				wg.Done()
 			}(s)
 		}
 	}
@@ -88,12 +87,14 @@ func (sc *SitemapChecker) ParseSitemaps(URLs []string, callback func(u string)) 
 // Otherwise it will return an slice containing only the original URL
 func (sc *SitemapChecker) checkIndex(URL string) []string {
 	sitemaps := []string{}
-
-	sitemap.ParseIndexFromSite(URL, func(e sitemap.IndexEntry) error {
-		l := e.GetLocation()
-		sitemaps = append(sitemaps, l)
-		return nil
-	})
+	response, err := sc.client.Get(URL)
+	if err == nil {
+		defer response.Response.Body.Close()
+		_ = sitemap.ParseIndex(response.Response.Body, func(e sitemap.IndexEntry) error {
+			sitemaps = append(sitemaps, e.GetLocation())
+			return nil
+		})
+	}
 
 	if len(sitemaps) == 0 {
 		sitemaps = append(sitemaps, URL)

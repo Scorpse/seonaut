@@ -1,9 +1,13 @@
 package services
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"log"
+	"time"
 
+	"github.com/stjudewashere/seonaut/internal/api"
 	"github.com/stjudewashere/seonaut/internal/config"
 	"github.com/stjudewashere/seonaut/internal/issues/multipage"
 	"github.com/stjudewashere/seonaut/internal/issues/page"
@@ -14,6 +18,8 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/mysql"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
+
+var ErrDatabaseUnavailable = errors.New("database unavailable")
 
 type Container struct {
 	Config             *config.Config
@@ -32,6 +38,18 @@ type Container struct {
 	CookieSession      *CookieSession
 	ArchiveService     *ArchiveService
 	ReplayService      *ReplayService
+	APIAuthenticator   api.Authenticator
+	APIKeyManager      api.KeyManager
+	APITenantManager   api.TenantManager
+	APIProjectManager  api.ProjectManager
+	APICrawlManager    api.CrawlManager
+	APIFindings        api.FindingService
+	APIExports         *APIExportManager
+	APIRateLimiter     *api.FixedWindowLimiter
+	APICrawlSlots      *api.ConcurrencyBudget
+	APIExportSlots     *api.ConcurrencyBudget
+	APITargetPolicy    *api.TargetPolicy
+	APIAudit           api.AuditSink
 
 	db                   *sql.DB
 	issueRepository      *repository.IssueRepository
@@ -41,6 +59,19 @@ type Container struct {
 	exportRepository     *repository.ExportRepository
 	crawlRepository      *repository.CrawlRepository
 	dashboardRepository  *repository.DashboardRepository
+	apiKeyRepository     *repository.APIKeyRepository
+	apiTenantRepository  *repository.APITenantRepository
+	apiProjectRepository *repository.APIProjectRepository
+	apiCrawlRepository   *repository.APICrawlRepository
+	apiFindingRepository *repository.APIFindingRepository
+	apiExportRepository  *repository.APIExportRepository
+}
+
+func (c *Container) Ready(ctx context.Context) error {
+	if c.db == nil {
+		return ErrDatabaseUnavailable
+	}
+	return c.db.PingContext(ctx)
 }
 
 func NewContainer(configFile string) *Container {
@@ -49,6 +80,7 @@ func NewContainer(configFile string) *Container {
 	c.InitDB()
 	c.InitArchiveService()
 	c.InitRepositories()
+	c.InitAPIServices()
 	c.InitPubSubBroker()
 	c.InitIssueService()
 	c.InitReportService()
@@ -59,6 +91,7 @@ func NewContainer(configFile string) *Container {
 	c.InitProjectService()
 	c.InitProjectViewService()
 	c.InitExportService()
+	c.InitAPIExportService()
 	c.InitCrawlerService()
 	c.InitRenderer()
 	c.InitCookieSession()
@@ -108,9 +141,38 @@ func (c *Container) InitRepositories() {
 	c.exportRepository = &repository.ExportRepository{DB: c.db}
 	c.crawlRepository = &repository.CrawlRepository{DB: c.db}
 	c.dashboardRepository = &repository.DashboardRepository{DB: c.db}
+	c.apiKeyRepository = &repository.APIKeyRepository{DB: c.db}
+	c.apiTenantRepository = &repository.APITenantRepository{DB: c.db}
+	c.apiProjectRepository = &repository.APIProjectRepository{DB: c.db}
+	c.apiCrawlRepository = &repository.APICrawlRepository{DB: c.db}
+	c.apiFindingRepository = &repository.APIFindingRepository{DB: c.db}
+	c.apiExportRepository = &repository.APIExportRepository{DB: c.db}
+	c.APIAudit = &repository.APIAuditRepository{DB: c.db}
 
-	// Clean up unfinished crawls.
+	if _, err := c.apiCrawlRepository.RecoverInterruptedCrawls(context.Background(), time.Now().UTC()); err != nil {
+		log.Printf("Recover interrupted API crawls: %v", err)
+	}
+	// Clean up unfinished UI crawls. API crawl rows and partial findings survive
+	// restart recovery for machine inspection.
 	c.crawlRepository.DeleteUnfinishedCrawls()
+}
+
+func (c *Container) InitAPIServices() {
+	var err error
+	c.APITargetPolicy, err = api.NewTargetPolicy(c.Config.API.Environment, c.Config.API.FixtureHosts, nil)
+	if err != nil {
+		log.Fatalf("Configure API target policy: %v", err)
+	}
+	c.APIRateLimiter = api.NewFixedWindowLimiter(time.Minute, map[api.RateClass]int{
+		api.RateRead: 600, api.RateCrawl: 30, api.RateExport: 120,
+	}, nil)
+	c.APICrawlSlots = api.NewConcurrencyBudget(2, 8)
+	c.APIExportSlots = api.NewConcurrencyBudget(4, 16)
+	c.APIAuthenticator, c.APIKeyManager = NewAPIServices(c.Config.API, c.apiKeyRepository)
+	c.APITenantManager = api.TenantManager{Store: c.apiTenantRepository, Keys: c.APIKeyManager}
+	c.APIProjectManager = api.ProjectManager{Store: c.apiProjectRepository, Targets: c.APITargetPolicy}
+	c.APICrawlManager = api.CrawlManager{Store: c.apiCrawlRepository, Projects: c.apiProjectRepository, Slots: c.APICrawlSlots, Targets: c.APITargetPolicy}
+	c.APIFindings = c.apiFindingRepository
 }
 
 // Create the PubSub broker.
@@ -191,14 +253,29 @@ func (c *Container) InitExportService() {
 	c.ExportService = NewExporter(c.exportRepository, c.Translator)
 }
 
+func (c *Container) InitAPIExportService() {
+	c.APIExports = &APIExportManager{
+		Store:    c.apiExportRepository,
+		Findings: c.APIFindings,
+		Exporter: c.ExportService,
+		Archives: c.ArchiveService,
+	}
+	c.APICrawlManager.CompletionObserver = c.APIExports
+	if err := c.APIExports.PurgeExpiredArchives(context.Background(), time.Now().UTC()); err != nil {
+		log.Printf("Purge expired API archives: %v", err)
+	}
+}
+
 // Create Crawler service.
 func (c *Container) InitCrawlerService() {
 	crawlerServices := CrawlerServicesContainer{
-		Broker:         c.PubSubBroker,
-		ReportManager:  c.ReportManager,
-		CrawlerHandler: NewCrawlerHandler(c.pageReportRepository, c.PubSubBroker, c.ReportManager),
-		ArchiveService: c.ArchiveService,
-		Config:         c.Config.Crawler,
+		Broker:          c.PubSubBroker,
+		ReportManager:   c.ReportManager,
+		CrawlerHandler:  NewCrawlerHandler(c.pageReportRepository, c.PubSubBroker, c.ReportManager),
+		ArchiveService:  c.ArchiveService,
+		Config:          c.Config.Crawler,
+		TargetValidator: c.APITargetPolicy,
+		Transport:       c.APITargetPolicy.Transport(),
 	}
 	repository := &struct {
 		*repository.CrawlRepository
@@ -209,6 +286,7 @@ func (c *Container) InitCrawlerService() {
 	}
 
 	c.CrawlerService = NewCrawlerService(repository, crawlerServices)
+	c.APICrawlManager.Runner = c.CrawlerService
 }
 
 // Create the dashboCallbackBuilderard service.

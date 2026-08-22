@@ -34,12 +34,22 @@ type UIConfig struct {
 	Theme    string `mapstructure:"theme"`
 }
 
+type APIConfig struct {
+	Environment            string   `mapstructure:"environment"`
+	RootPublicID           string   `mapstructure:"root_public_id"`
+	RootHash               string   `mapstructure:"root_hash"`
+	CursorSecret           string   `mapstructure:"cursor_secret"`
+	RotationOverlapSeconds int      `mapstructure:"rotation_overlap_seconds"`
+	FixtureHosts           []string `mapstructure:"fixture_hosts"`
+}
+
 // Config stores the configuration for the application.
 type Config struct {
 	Crawler    *CrawlerConfig    `mapstructure:"crawler"`
 	HTTPServer *HTTPServerConfig `mapstructure:"server"`
 	DB         *DBConfig         `mapstructure:"database"`
 	UIConfig   *UIConfig         `mapstructure:"UI"`
+	API        *APIConfig        `mapstructure:"api"`
 }
 
 // NewConfig loads the configuration from the specified file and path.

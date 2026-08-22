@@ -269,7 +269,8 @@ func (ds *ExportRepository) ExportVideos(crawl *models.Crawl) <-chan *models.Exp
 		query := `
 			SELECT
 				pagereports.url,
-				videos.url
+				videos.url,
+				videos.poster
 			FROM videos
 			LEFT JOIN pagereports ON pagereports.id  = videos.pagereport_id
 			WHERE videos.crawl_id = ?`
@@ -281,7 +282,7 @@ func (ds *ExportRepository) ExportVideos(crawl *models.Crawl) <-chan *models.Exp
 
 		for rows.Next() {
 			v := &models.ExportVideo{}
-			err := rows.Scan(&v.Origin, &v.Video)
+			err := rows.Scan(&v.Origin, &v.Video, &v.Poster)
 			if err != nil {
 				log.Println(err)
 				continue

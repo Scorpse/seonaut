@@ -35,6 +35,7 @@ type Audio struct {
 type ExportVideo struct {
 	Origin string
 	Video  string
+	Poster string
 }
 
 type ExportHreflang struct {

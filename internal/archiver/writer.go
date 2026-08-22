@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -173,25 +174,24 @@ func (s *Writer) readResponseHeaders(contentBuffer *bytes.Buffer, response *http
 }
 
 // Close closes the archive and creates the remaining files.
-func (s *Writer) Close() {
-	err := s.createIndex()
-	if err != nil {
-		log.Printf("failed to create index file entry in ZIP: %v", err)
+func (s *Writer) Close() error {
+	var closeErrors []error
+	if err := s.createIndex(); err != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("create index: %w", err))
 	}
-
-	err = s.createPages()
-	if err != nil {
-		log.Printf("failed to create pages file entry in ZIP: %v", err)
+	if err := s.createPages(); err != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("create pages: %w", err))
 	}
-
-	s.waczWriter.Close()
-	s.file.Close()
-
-	err = s.createDatapackage()
-	if err != nil {
-		log.Printf("failed to create datapackage.json: %v", err)
-		return
+	if err := s.waczWriter.Close(); err != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("close WACZ: %w", err))
 	}
+	if err := s.file.Close(); err != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("close archive file: %w", err))
+	}
+	if err := s.createDatapackage(); err != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("create datapackage: %w", err))
+	}
+	return errors.Join(closeErrors...)
 }
 
 // Create the index file.
@@ -215,8 +215,7 @@ func (s *Writer) createIndex() error {
 
 		jsonEntry, err := json.Marshal(entry)
 		if err != nil {
-			log.Printf("failed to json marshal index %v", err)
-			continue
+			return fmt.Errorf("marshal index entry: %w", err)
 		}
 
 		cdxjLine := fmt.Sprintf("%s %s %s\n", searchableURL, entry.time.Format("20060102150405"), jsonEntry)
@@ -225,7 +224,9 @@ func (s *Writer) createIndex() error {
 
 	slices.Sort(cdx)
 	for _, e := range cdx {
-		indexWriter.Write([]byte(e))
+		if _, err := indexWriter.Write([]byte(e)); err != nil {
+			return fmt.Errorf("write index entry: %w", err)
+		}
 	}
 
 	return nil
@@ -240,7 +241,9 @@ func (s *Writer) createPages() error {
 
 	header := `{"format": "json-pages-1.0", "id": "pages", "title": "All Pages"}`
 	header += "\n"
-	pagesWriter.Write([]byte(header))
+	if _, err := pagesWriter.Write([]byte(header)); err != nil {
+		return fmt.Errorf("write pages header: %w", err)
+	}
 
 	for _, e := range s.indexEntries {
 		page := PageEntry{
@@ -254,9 +257,8 @@ func (s *Writer) createPages() error {
 		}
 
 		jsonPage = append(jsonPage, '\n')
-		_, err = pagesWriter.Write(jsonPage)
-		if err != nil {
-			log.Printf("error adding page %s %v", jsonPage, err)
+		if _, err := pagesWriter.Write(jsonPage); err != nil {
+			return fmt.Errorf("write page entry: %w", err)
 		}
 	}
 
@@ -266,31 +268,39 @@ func (s *Writer) createPages() error {
 // Create the datapackage.json file.
 // Opens the zip file and reads all the files to create the resources json along with the hash.
 // Then it saves the datapackage and creates the datapackage-digest json file.
-func (s *Writer) createDatapackage() error {
+func (s *Writer) createDatapackage() (returnErr error) {
 	archive, err := zip.OpenReader(s.file.Name())
 	if err != nil {
 		log.Printf("Failed to open ZIP archive for reading: %v", err)
 		return err
 	}
-	defer archive.Close()
+	defer func() {
+		returnErr = errors.Join(returnErr, archive.Close())
+	}()
 
 	datapackage, err := s.getResources(archive)
 	if err != nil {
-		log.Printf("failed to get zip resources %v", err)
+		return fmt.Errorf("get zip resources: %w", err)
 	}
 
 	f, err := os.OpenFile(s.file.Name(), os.O_RDWR, 0644)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		returnErr = errors.Join(returnErr, f.Close())
+	}()
 
 	zipWriter := zip.NewWriter(f)
-	defer zipWriter.Close()
+	defer func() {
+		returnErr = errors.Join(returnErr, zipWriter.Close())
+	}()
 
 	// Copy existing files.
 	for _, file := range archive.File {
-		zipWriter.Copy(file)
+		if err := zipWriter.Copy(file); err != nil {
+			return fmt.Errorf("copy archive entry %q: %w", file.Name, err)
+		}
 	}
 
 	// create datapackage.
@@ -317,7 +327,7 @@ func (s *Writer) createDatapackage() error {
 	}
 	digest, err := json.MarshalIndent(digestMap, "", "  ")
 	if err != nil {
-		return nil
+		return fmt.Errorf("marshal datapackage digest: %w", err)
 	}
 
 	_, err = datapackageDigest.Write(digest)
@@ -355,12 +365,14 @@ func (s *Writer) getResources(archive *zip.ReadCloser) ([]byte, error) {
 }
 
 // calculateHash returns the hash string of a zip.File.
-func (s *Writer) calculateHash(file *zip.File) (string, error) {
+func (s *Writer) calculateHash(file *zip.File) (hashValue string, returnErr error) {
 	rc, err := file.Open()
 	if err != nil {
 		return "", err
 	}
-	defer rc.Close()
+	defer func() {
+		returnErr = errors.Join(returnErr, rc.Close())
+	}()
 	hash := sha256.New()
 	_, err = io.Copy(hash, rc)
 	if err != nil {

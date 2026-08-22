@@ -120,6 +120,28 @@ func TestSigin(t *testing.T) {
 	}
 }
 
+func TestServiceUserCannotSignIn(t *testing.T) {
+	serviceUser := *testUser
+	serviceUser.APIOnly = true
+	repo := &serviceUserRepository{user: &serviceUser}
+	service := services.NewUserService(repo, &testTranslator{})
+
+	if _, err := service.SignIn(serviceUser.Email, password); !errors.Is(err, services.ErrUnexistingUser) {
+		t.Fatalf("service user sign-in error = %v, want %v", err, services.ErrUnexistingUser)
+	}
+}
+
+type serviceUserRepository struct{ user *models.User }
+
+func (r *serviceUserRepository) FindUserByEmail(string) (*models.User, error) { return r.user, nil }
+func (r *serviceUserRepository) UserSignup(string, string, string, string) (*models.User, error) {
+	return nil, nil
+}
+func (r *serviceUserRepository) UserUpdatePassword(string, string) error               { return nil }
+func (r *serviceUserRepository) DeleteUser(*models.User) error                         { return nil }
+func (r *serviceUserRepository) DisableUser(*models.User) error                        { return nil }
+func (r *serviceUserRepository) UserUpdateSettings(*models.User, string, string) error { return nil }
+
 // TestUpdatePassword tests the UpdatePassword method of the user service.
 // It verifies the behavior of the UpdatePassword function for different input scenarios.
 // For each test case, it calls the UpdatePassword function with the provided email and password,

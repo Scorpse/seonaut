@@ -1,9 +1,14 @@
 package crawler_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/stjudewashere/seonaut/internal/crawler"
@@ -12,6 +17,7 @@ import (
 type mockClient struct {
 	lastRequest *http.Request
 	ForceError  bool
+	response    *http.Response
 }
 
 func (m *mockClient) Do(req *http.Request) (*http.Response, error) {
@@ -21,9 +27,18 @@ func (m *mockClient) Do(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("mock error")
 	}
 
-	return &http.Response{
-		StatusCode: http.StatusOK,
-	}, nil
+	if m.response != nil {
+		m.response.Request = req
+		return m.response, nil
+	}
+	return &http.Response{StatusCode: http.StatusOK}, nil
+}
+
+type rejectingValidator struct{ calls int }
+
+func (v *rejectingValidator) ValidateURL(context.Context, *url.URL) error {
+	v.calls++
+	return errors.New("target rejected")
 }
 
 // Test user agent in Get requests.
@@ -143,6 +158,36 @@ func TestHTTPError(t *testing.T) {
 	_, err := client.Get("http://example.com")
 	if err == nil {
 		t.Fatal("expected an error, got none")
+	}
+}
+
+func TestTargetIsValidatedBeforeRequest(t *testing.T) {
+	validator := &rejectingValidator{}
+	mockClient := &mockClient{}
+	client := crawler.NewBasicClient(&crawler.ClientOptions{TargetValidator: validator}, mockClient)
+
+	if _, err := client.Get("http://127.0.0.1/"); err == nil {
+		t.Fatal("expected target validation error")
+	}
+	if validator.calls != 1 || mockClient.lastRequest != nil {
+		t.Fatalf("validator calls=%d request=%v", validator.calls, mockClient.lastRequest)
+	}
+}
+
+func TestResponseBodyLimitRejectsOversizedPayload(t *testing.T) {
+	mockClient := &mockClient{response: &http.Response{
+		StatusCode:    http.StatusOK,
+		ContentLength: -1,
+		Body:          io.NopCloser(bytes.NewBufferString("12345")),
+	}}
+	client := crawler.NewBasicClient(&crawler.ClientOptions{MaxResponseBytes: 4}, mockClient)
+	response, err := client.Get("https://example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadAll(response.Response.Body)
+	if !errors.Is(err, crawler.ErrResponseTooLarge) {
+		t.Fatalf("read error = %v, want ErrResponseTooLarge", err)
 	}
 }
 
